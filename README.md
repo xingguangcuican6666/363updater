@@ -57,6 +57,28 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 
 `targetVersionOverride` 可固定目标版本。ModMenu 未安装时 updater 仍可运行，但不会显示配置界面。
 
+`modrinthApiRoot` 默认是 `https://api.modrinth.com/v2`。它可以指向兼容的镜像或本地测试服务；API 返回的 mrpack 下载 URL 也可以使用本地 HTTP 地址。
+
+## 本地 API 测试
+
+仓库提供一个只实现 updater 所需端点的 mock server：
+
+```bash
+python3 tools/mock_modrinth_server.py \
+  --old-package /path/to/0.20.2.mrpack \
+  --target-package /path/to/0.21.1.mrpack
+```
+
+然后在 ModMenu 中设置：
+
+- `Modrinth API root`: `http://127.0.0.1:8763/v2`
+- `Modrinth project`: `363fan`
+- `Current version override`: `0.20.2`
+- `Minecraft version override`: `26.1.2`
+- `Loader override`: `fabric`
+
+服务提供 `/health`、`/v2/project/363fan/version` 和 `/files/<mrpack>`，下载仍经过 updater 的大小与 SHA-512 校验。
+
 ## 安全边界
 
 updater 不替换模组 jar，不更新资源包、shaderpacks、PCL 或其他 mrpack 文件。写入范围被限制为 `config/**` 和 `options.txt`，并拒绝目录穿越及符号链接目标。更新前的完整备份先在临时目录构建，完成后再发布；事务失败时会恢复更新前的配置。

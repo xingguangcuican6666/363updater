@@ -25,6 +25,7 @@
   "text.autoconfig.updater363.option.autoCheck": "启动后自动检查",
   "text.autoconfig.updater363.option.checkIntervalMinutes": "检查间隔（分钟）",
   "text.autoconfig.updater363.option.networkTimeoutSeconds": "网络超时（秒）",
+  "text.autoconfig.updater363.option.modrinthApiRoot": "Modrinth API 根地址",
   "text.autoconfig.updater363.option.backupCount": "保留备份数量",
   "text.autoconfig.updater363.option.cachePackages": "缓存 mrpack",
   "text.autoconfig.updater363.option.allowTargetDeletes": "同步目标删除",

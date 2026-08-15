@@ -25,6 +25,7 @@
   "text.autoconfig.updater363.option.autoCheck": "Check automatically after launch",
   "text.autoconfig.updater363.option.checkIntervalMinutes": "Check interval (minutes)",
   "text.autoconfig.updater363.option.networkTimeoutSeconds": "Network timeout (seconds)",
+  "text.autoconfig.updater363.option.modrinthApiRoot": "Modrinth API root",
   "text.autoconfig.updater363.option.backupCount": "Backups to retain",
   "text.autoconfig.updater363.option.cachePackages": "Cache mrpack files",
   "text.autoconfig.updater363.option.allowTargetDeletes": "Apply target deletions",

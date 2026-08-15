@@ -14,3 +14,5 @@ forge/runs/
 *.ipr
 *.iws
 *.iml
+__pycache__/
+*.pyc

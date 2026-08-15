@@ -37,6 +37,10 @@ class UpdaterConfig : ConfigData {
     @ConfigEntry.Category("advanced")
     var networkTimeoutSeconds: Int = 30
 
+    @Comment("Modrinth-compatible API root; change only for mirrors or local testing")
+    @ConfigEntry.Category("advanced")
+    var modrinthApiRoot: String = "https://api.modrinth.com/v2"
+
     @Comment("Keep the last three backups by default")
     @ConfigEntry.BoundedDiscrete(min = 1, max = 10)
     @ConfigEntry.Category("advanced")

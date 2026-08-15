@@ -87,7 +87,7 @@ object UpdaterService {
             plan = null
             stateRef.set(state.copy(checking = true, error = ""))
             val future = CompletableFuture.supplyAsync({
-                val resolved = VersionResolver(ModrinthClient(timeoutMs()), config).resolve()
+                val resolved = VersionResolver(modrinthClient(), config).resolve()
                 selection = resolved
                 val hasUpdate = VersionResolver.isNewer(resolved.target, resolved.current)
                 UpdateState(
@@ -128,7 +128,7 @@ object UpdaterService {
             val target = packagePath(resolved.target)
             val keepPackages = config.cachePackages
             try {
-                val client = ModrinthClient(timeoutMs())
+                val client = modrinthClient()
                 if (!client.cachedFileValid(resolved.current, old)) client.download(resolved.current, old)
                 if (!client.cachedFileValid(resolved.target, target)) client.download(resolved.target, target)
                 val result = PackageMerger.preview(
@@ -181,6 +181,8 @@ object UpdaterService {
     fun markPromptShown() { promptVersion = state.targetVersion }
 
     fun timeoutMs(): Int = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000
+
+    private fun modrinthClient(): ModrinthClient = ModrinthClient(timeoutMs(), config.modrinthApiRoot)
 
     fun packagePath(version: com.github.fanziyun.updater.data.ModrinthVersion): Path {
         val project = config.modrinthProject.trim().ifBlank { "363fan" }.replace(Regex("[^A-Za-z0-9._-]"), "_")

@@ -44,17 +44,32 @@ data class ModrinthVersion(
 
 class ModrinthException(message: String, cause: Throwable? = null) : IOException(message, cause)
 
-class ModrinthClient(private val timeoutMs: Int) {
-    private companion object {
-        const val API_ROOT = "https://api.modrinth.com/v2"
+class ModrinthClient(private val timeoutMs: Int, configuredApiRoot: String = DEFAULT_API_ROOT) {
+    private val apiRoot = normalizeApiRoot(configuredApiRoot)
+
+    companion object {
+        const val DEFAULT_API_ROOT = "https://api.modrinth.com/v2"
         const val MAX_METADATA_BYTES = 8L * 1024L * 1024L
         const val MAX_PACKAGE_BYTES = 128L * 1024L * 1024L
         const val USER_AGENT = "363Updater/0.1.0"
+
+        internal fun normalizeApiRoot(configured: String): String {
+            val normalized = configured.trim().ifBlank { DEFAULT_API_ROOT }.trimEnd('/')
+            val uri = runCatching { URI.create(normalized) }
+                .getOrElse { throw IllegalArgumentException("Invalid Modrinth API root: $configured", it) }
+            require(uri.scheme?.lowercase(Locale.ROOT) in setOf("http", "https") && uri.host != null) {
+                "Modrinth API root must be an HTTP(S) URL: $configured"
+            }
+            require(uri.rawQuery == null && uri.rawFragment == null) {
+                "Modrinth API root cannot contain a query or fragment: $configured"
+            }
+            return normalized
+        }
     }
 
     fun versions(project: String): List<ModrinthVersion> {
         val encoded = URLEncoder.encode(project.trim(), StandardCharsets.UTF_8)
-        val body = request("$API_ROOT/project/$encoded/version", MAX_METADATA_BYTES)
+        val body = request("$apiRoot/project/$encoded/version", MAX_METADATA_BYTES)
         val array = JsonParser.parseString(body).asJsonArray
         return array.map { parseVersion(it.asJsonObject) }
     }

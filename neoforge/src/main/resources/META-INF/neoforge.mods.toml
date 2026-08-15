@@ -1,7 +1,7 @@
 modLoader = "javafml"
 loaderVersion = "${neoforge_loader_version_range}"
 license = "${mod_license}"
-issueTrackerURL = "https://github.com/fanziyun/363updater/issues"
+issueTrackerURL = "https://github.com/xingguangcuican6666/363updater/issues"
 
 [[mods]]
 modId = "${mod_id}"

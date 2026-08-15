@@ -6,8 +6,8 @@
   "description": "Download Modrinth modpack configuration updates with three-way merging",
   "authors": ["${mod_author}"],
   "contact": {
-    "homepage": "https://github.com/fanziyun/363updater",
-    "sources": "https://github.com/fanziyun/363updater"
+    "homepage": "https://github.com/xingguangcuican6666/363updater",
+    "sources": "https://github.com/xingguangcuican6666/363updater"
   },
   "license": "${mod_license}",
   "icon": "assets/updater363/icon.png",

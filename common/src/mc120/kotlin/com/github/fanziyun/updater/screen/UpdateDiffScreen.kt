@@ -65,7 +65,9 @@ class UpdateDiffScreen(
                     error = exception.cause?.message ?: exception.message ?: "Update failed"
                     updateButton?.active = true
                 } else {
-                    ClientScreens.set(UpdateResultScreen(parentScreen, result.reloadFailures))
+                    ClientScreens.set(
+                        UpdateResultScreen(UpdateScreenNavigation.resultParent(parentScreen), result.reloadFailures),
+                    )
                 }
             }
         }

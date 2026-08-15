@@ -7,8 +7,9 @@ import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
 import net.minecraft.network.chat.Component
 
-class UpdatePromptScreen(private val parentScreen: Screen?) :
-    Screen(Component.translatable("screen.updater363.prompt.title")) {
+class UpdatePromptScreen(internal val parentScreen: Screen?) :
+    Screen(Component.translatable("screen.updater363.prompt.title")), UpdatePromptParent<Screen> {
+    override val updateParent: Screen? get() = parentScreen
     override fun init() {
         super.init()
         val width = 210

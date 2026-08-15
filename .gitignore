@@ -1,0 +1,16 @@
+.gradle/
+build/
+common/build/
+fabric/build/
+neoforge/build/
+forge/.gradle/
+forge/build/
+forge/gradlew
+forge/gradlew.bat
+forge/gradle/wrapper/gradle-wrapper.jar
+fabric/runs/
+neoforge/runs/
+forge/runs/
+*.ipr
+*.iws
+*.iml

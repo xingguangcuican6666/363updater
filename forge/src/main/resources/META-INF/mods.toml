@@ -1,0 +1,47 @@
+modLoader = "javafml"
+loaderVersion = "${forge_loader_version_range}"
+license = "${mod_license}"
+issueTrackerURL = "https://github.com/fanziyun/363updater/issues"
+
+[[mods]]
+modId = "${mod_id}"
+version = "${version}"
+displayName = "${mod_name}"
+authors = "${mod_author}"
+logoFile = "assets/${mod_id}/icon.png"
+description = '''Download Modrinth modpack configuration updates with three-way merging.'''
+
+[[dependencies.${mod_id}]]
+modId = "forge"
+mandatory = true
+versionRange = "${forge_version_range}"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "minecraft"
+mandatory = true
+versionRange = "${minecraft_version_range}"
+ordering = "NONE"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "kotlinforforge"
+mandatory = true
+versionRange = "${kotlin_for_forge_version_range}"
+ordering = "AFTER"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "cloth_config"
+mandatory = true
+versionRange = "[${cloth_config_version},)"
+ordering = "AFTER"
+side = "CLIENT"
+
+[[dependencies.${mod_id}]]
+modId = "changelog363"
+mandatory = false
+versionRange = "[1,)"
+ordering = "AFTER"
+side = "CLIENT"

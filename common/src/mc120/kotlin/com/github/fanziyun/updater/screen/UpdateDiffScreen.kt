@@ -45,7 +45,8 @@ class UpdateDiffScreen(
             ClientScreens.execute {
                 if (ClientScreens.current() !== this@UpdateDiffScreen) return@execute
                 loading = false
-                if (exception != null) error = exception.cause?.message ?: exception.message ?: "Unknown error"
+                if (exception != null) error = exception.cause?.message ?: exception.message
+                    ?: Component.translatable("screen.updater363.unknown_error").string
                 else {
                     plan = result
                     detailLines = buildLines(result)
@@ -70,7 +71,8 @@ class UpdateDiffScreen(
             ClientScreens.execute {
                 if (ClientScreens.current() !== this@UpdateDiffScreen) return@execute
                 if (exception != null) {
-                    error = exception.cause?.message ?: exception.message ?: "Update failed"
+                    error = exception.cause?.message ?: exception.message
+                        ?: Component.translatable("screen.updater363.unknown_error").string
                     updateButton?.active = true
                 } else {
                     showResult(result)
@@ -99,7 +101,10 @@ class UpdateDiffScreen(
             loading -> renderMessage(graphics, Component.translatable("screen.updater363.loading").string, 0xFFCCCCCC.toInt())
             error != null -> renderMessage(
                 graphics,
-                Component.translatable("screen.updater363.error", error ?: "Unknown error").string,
+                Component.translatable(
+                    "screen.updater363.error",
+                    error ?: Component.translatable("screen.updater363.unknown_error").string,
+                ).string,
                 0xFFFF5555.toInt(),
             )
             plan == null -> renderMessage(graphics, Component.translatable("screen.updater363.no_diff").string, 0xFFCCCCCC.toInt())
@@ -133,8 +138,19 @@ class UpdateDiffScreen(
 
     private fun buildLines(plan: UpdatePlan): List<RenderLine> = buildList {
         add(RenderLine("${plan.currentVersion} -> ${plan.targetVersion}", 0xFFFFFFFF.toInt()))
-        add(RenderLine("files ${plan.changedFiles.size} | write ${plan.updatedFiles.size} | delete ${plan.deletedFiles.size}", 0xFFAAAAAA.toInt()))
-        add(RenderLine("keys ~${plan.updatedKeys} =${plan.preservedKeys} +${plan.addedKeys} -${plan.removedKeys}", 0xFFAAAAAA.toInt()))
+        add(RenderLine(Component.translatable(
+            "screen.updater363.diff.summary.files",
+            plan.changedFiles.size,
+            plan.updatedFiles.size,
+            plan.deletedFiles.size,
+        ).string, 0xFFAAAAAA.toInt()))
+        add(RenderLine(Component.translatable(
+            "screen.updater363.diff.summary.keys",
+            plan.updatedKeys,
+            plan.preservedKeys,
+            plan.addedKeys,
+            plan.removedKeys,
+        ).string, 0xFFAAAAAA.toInt()))
         add(RenderLine("", 0xFFFFFFFF.toInt()))
         plan.displayedFiles.forEach { file ->
             val marker = if (file.action == FileAction.DELETE) "-" else "~"

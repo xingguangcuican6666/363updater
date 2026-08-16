@@ -21,7 +21,9 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
     override fun init() {
         super.init()
         capabilities = runCatching { UpdaterService.restartCapabilities() }
-            .onFailure { error = it.message ?: "Unable to inspect restart support" }
+            .onFailure {
+                error = RestartReasonText.failure(it.message ?: "Unable to inspect restart support")
+            }
             .getOrNull()
         val caps = capabilities
         val buttonWidth = 230
@@ -60,7 +62,7 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
         super.tick()
         val current = session ?: return
         if (current.progress.stage == RestartProgressStage.FAILED) {
-            error = current.progress.message
+            error = RestartReasonText.failure(current.progress.message)
             session = null
             actionButtons.forEach { it.active = true }
             capabilities?.let { caps ->
@@ -84,9 +86,11 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
         graphics.drawString(font, fit(message, width - 50), 25, 65, 0xFFCCCCCC.toInt())
         error?.let { graphics.drawString(font, fit(it, width - 50), 25, 88, 0xFFFFAA00.toInt()) }
         if (capabilities?.automaticAvailable == false && session == null) {
-            graphics.drawString(font, fit(capabilities?.automaticReason.orEmpty(), width - 50), 25, 110, 0xFFAAAAAA.toInt())
+            val reason = RestartReasonText.automaticCapability(capabilities?.automaticReason.orEmpty())
+            graphics.drawString(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
         } else if (UpdaterService.config.experimentalFastRestart && capabilities?.fastAvailable == false && session == null) {
-            graphics.drawString(font, fit(capabilities?.fastReason.orEmpty(), width - 50), 25, 110, 0xFFAAAAAA.toInt())
+            val reason = RestartReasonText.fastCapability(capabilities?.fastReason.orEmpty())
+            graphics.drawString(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
         }
     }
 

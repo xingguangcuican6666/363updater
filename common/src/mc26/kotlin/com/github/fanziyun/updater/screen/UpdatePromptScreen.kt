@@ -37,7 +37,10 @@ class UpdatePromptScreen(internal val parentScreen: Screen?) :
                 UpdaterService.rollback().whenComplete { _, exception ->
                     ClientScreens.execute {
                         if (ClientScreens.current() !== this@UpdatePromptScreen) return@execute
-                        val failures = exception?.let { listOf(it.cause?.message ?: it.message ?: "Rollback failed") }.orEmpty()
+                        val failures = exception?.let {
+                            listOf(it.cause?.message ?: it.message
+                                ?: Component.translatable("screen.updater363.rollback.failed").string)
+                        }.orEmpty()
                         ClientScreens.set(UpdateResultScreen(parentScreen, failures, rollback = true))
                     }
                 }

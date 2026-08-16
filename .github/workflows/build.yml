@@ -1,0 +1,117 @@
+name: Build and release
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: 1.20.1-fabric
+            label: Minecraft 1.20.1 Fabric
+            java: "17"
+            artifact: 363updater-1.20.1-fabric
+            output: fabric/build/libs/363updater-1.20.1-fabric-*.jar
+          - target: 1.20.1-forge
+            label: Minecraft 1.20.1 Forge
+            java: "17"
+            artifact: 363updater-1.20.1-forge
+            output: forge/build/libs/363updater-1.20.1-forge-*.jar
+          - target: 1.21.1
+            label: Minecraft 1.21.1 Fabric and NeoForge
+            java: "21"
+            artifact: 363updater-1.21.1
+            output: |
+              fabric/build/libs/363updater-1.21.1-fabric-*.jar
+              neoforge/build/libs/363updater-1.21.1-neoforge-*.jar
+          - target: 26.1.2
+            label: Minecraft 26.1.2 Fabric and NeoForge
+            java: "25"
+            artifact: 363updater-26.1.2
+            output: |
+              fabric/build/libs/363updater-26.1.2-fabric-*.jar
+              neoforge/build/libs/363updater-26.1.2-neoforge-*.jar
+          - target: 26.2
+            label: Minecraft 26.2 Fabric and NeoForge
+            java: "25"
+            artifact: 363updater-26.2
+            output: |
+              fabric/build/libs/363updater-26.2-fabric-*.jar
+              neoforge/build/libs/363updater-26.2-neoforge-*.jar
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build ${{ matrix.target }}
+        shell: bash
+        run: |
+          UPDATER_FORGE_JAVA_HOME="$JAVA_HOME" \
+            ./gradlew build "-Pupdater_target=${{ matrix.target }}" --stacktrace
+
+      - name: Upload ${{ matrix.artifact }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: 363updater-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          compgen -G 'dist/*.jar' > /dev/null
+          if gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.jar --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.jar \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --generate-notes
+          fi

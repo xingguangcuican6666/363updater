@@ -17,7 +17,7 @@ object BackupManager {
     private val root: Path
         get() = Platform.INSTANCE.gameDir.resolve(".cache").resolve(Updater.MOD_ID).resolve("backups")
 
-    fun create(retain: Int): BackupInfo {
+    fun create(retain: Int, includeMods: Boolean = false): BackupInfo {
         val createdAt = Instant.now()
         val id = createdAt.toString().replace(":", "-").replace(".", "-")
         val path = root.resolve(id)
@@ -28,6 +28,7 @@ object BackupManager {
             val payload = temporary.resolve("payload")
             Files.createDirectories(payload)
             copyTree(Platform.INSTANCE.gameDir.resolve("config"), payload.resolve("config"))
+            if (includeMods) copyTree(Platform.INSTANCE.gameDir.resolve("mods"), payload.resolve("mods"))
             val options = Platform.INSTANCE.gameDir.resolve("options.txt")
             require(!Files.isSymbolicLink(options)) { "Updater refuses symbolic-link path: $options" }
             if (Files.isRegularFile(options)) {
@@ -73,19 +74,27 @@ object BackupManager {
         }
         val backupConfig = payload.resolve("config")
         val options = payload.resolve("options.txt")
+        val backupMods = payload.resolve("mods")
         validateTree(backupConfig)
+        validateTree(backupMods)
         require(!Files.isSymbolicLink(options)) { "Invalid updater backup: symbolic-link options.txt" }
 
         val gameDir = Platform.INSTANCE.gameDir
         val configTarget = gameDir.resolve("config")
         val optionsTarget = gameDir.resolve("options.txt")
+        val modsTarget = gameDir.resolve("mods")
         require(!Files.isSymbolicLink(configTarget)) { "Updater refuses symbolic-link path: $configTarget" }
         require(!Files.isSymbolicLink(optionsTarget)) { "Updater refuses symbolic-link path: $optionsTarget" }
+        require(!Files.isSymbolicLink(modsTarget)) { "Updater refuses symbolic-link path: $modsTarget" }
 
         deleteTree(configTarget)
         deleteIfRegular(optionsTarget)
         copyTree(backupConfig, configTarget)
         if (Files.isRegularFile(options)) Files.copy(options, gameDir.resolve("options.txt"), StandardCopyOption.REPLACE_EXISTING)
+        if (Files.isDirectory(backupMods, LinkOption.NOFOLLOW_LINKS)) {
+            deleteTree(modsTarget)
+            copyTree(backupMods, modsTarget)
+        }
         Updater.LOGGER.info("Restored updater backup {}", backup.id)
     }
 

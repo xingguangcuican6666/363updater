@@ -1,7 +1,10 @@
 package com.github.fanziyun.updater.mixin
 
 import com.github.fanziyun.updater.UpdaterService
+import com.github.fanziyun.updater.handoff.FastRestartClientHooks
+import com.github.fanziyun.updater.handoff.HandoffChildSession
 import com.github.fanziyun.updater.screen.ClientScreens
+import com.github.fanziyun.updater.screen.RestartChoiceScreen
 import com.github.fanziyun.updater.screen.UpdatePromptScreen
 import com.github.fanziyun.updater.util.ButtonPlacement
 import net.minecraft.client.gui.components.Button
@@ -17,6 +20,16 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 abstract class TitleScreenMixin : Screen(Component.literal("")) {
     @Inject(method = ["init"], at = [At("TAIL")])
     fun updater363_addButton(callback: CallbackInfo) {
+        if (HandoffChildSession.active) {
+            (ClientScreens.current() as? TitleScreen)?.let(FastRestartClientHooks::onTitleScreen)
+            return
+        }
+        if (UpdaterService.activeTransaction() != null) {
+            addUpdaterButton(Component.translatable("menu.updater363.pending")) {
+                ClientScreens.set(RestartChoiceScreen(this))
+            }
+            return
+        }
         if (!UpdaterService.state.hasUpdate) return
         if (UpdaterService.shouldPrompt()) {
             UpdaterService.markPromptShown()
@@ -27,14 +40,18 @@ abstract class TitleScreenMixin : Screen(Component.literal("")) {
             }
             return
         }
-        val width = 200
-        val left = this.width / 2 - width / 2
-        val y = ButtonPlacement.belowExistingColumn(children(), height, left, left + width) ?: (height / 4 + 48 + 72)
+        addUpdaterButton(Component.translatable("menu.updater363.button")) {
+            UpdaterService.markPromptShown()
+            ClientScreens.set(UpdatePromptScreen(ClientScreens.current()))
+        }
+    }
+
+    private fun addUpdaterButton(label: Component, action: () -> Unit) {
+        val buttonWidth = 200
+        val left = width / 2 - buttonWidth / 2
+        val y = ButtonPlacement.belowExistingColumn(children(), height, left, left + buttonWidth) ?: (height / 4 + 48 + 72)
         addRenderableWidget(
-            Button.builder(Component.translatable("menu.updater363.button")) {
-                UpdaterService.markPromptShown()
-                ClientScreens.set(UpdatePromptScreen(ClientScreens.current()))
-            }.bounds(left, y, width, ButtonPlacement.BUTTON_HEIGHT).build()
+            Button.builder(label) { action() }.bounds(left, y, buttonWidth, ButtonPlacement.BUTTON_HEIGHT).build(),
         )
     }
 }

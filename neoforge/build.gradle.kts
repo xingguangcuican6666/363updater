@@ -8,9 +8,11 @@ val common = project(":common")
 val modId = rootProject.property("mod_id") as String
 
 sourceSets.main {
+    java.srcDir(common.file("src/main/java"))
     kotlin.srcDir(common.file("src/main/kotlin"))
     rootProject.property("ui_source").toString().split(',').map(String::trim).forEach { source ->
         kotlin.srcDir(common.file("src/$source/kotlin"))
+        java.srcDir(common.file("src/$source/java"))
     }
     resources.srcDir(common.file("src/main/resources"))
 }
@@ -29,6 +31,9 @@ neoForge {
 dependencies {
     implementation("thedarkcolour:kotlinforforge-neoforge:${rootProject.property("kotlin_for_forge_version")}")
     implementation("me.shedaniel.cloth:cloth-config-neoforge:${rootProject.property("cloth_config_version")}")
+    compileOnly("net.java.dev.jna:jna-platform:5.12.1")
+    compileOnly("org.ow2.asm:asm:9.9.1")
+    compileOnly("org.ow2.asm:asm-tree:9.9.1")
 }
 
 tasks.processResources {
@@ -47,6 +52,7 @@ tasks.processResources {
         "updater_target" to rootProject.property("updater_target"),
         "mixin_java_compatibility" to rootProject.property("mixin_java_compatibility"),
         "pack_format" to rootProject.property("pack_format"),
+        "fast_restart_mixins" to rootProject.property("fast_restart_mixins"),
     )
     inputs.properties(props)
     filesMatching(

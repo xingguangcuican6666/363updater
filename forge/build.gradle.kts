@@ -21,7 +21,12 @@ repositories {
 val targetJavaVersion = (property("java_version") as String).toInt()
 java.toolchain.languageVersion.set(JavaLanguageVersion.of(targetJavaVersion))
 
+val handoffJava = sourceSets.create("handoffJava") {
+    java.setSrcDirs(listOf("../common/src/main/java"))
+}
+
 sourceSets.main {
+    java.setSrcDirs(listOf("src/main/java", "../common/src/mc120/java"))
     kotlin.setSrcDirs(
         listOf(
             "src/main/kotlin",
@@ -51,7 +56,12 @@ dependencies {
     minecraft("net.minecraftforge:forge:${property("forge_version")}")
     implementation("thedarkcolour:kotlinforforge:${property("kotlin_for_forge_version")}")
     implementation("me.shedaniel.cloth:cloth-config-forge:${property("cloth_config_version")}")
+    compileOnly("net.java.dev.jna:jna-platform:5.12.1")
+    compileOnly("org.ow2.asm:asm:9.9.1")
+    compileOnly("org.ow2.asm:asm-tree:9.9.1")
 }
+
+handoffJava.compileClasspath += sourceSets.main.get().compileClasspath
 
 tasks.processResources {
     val props = mapOf(
@@ -69,6 +79,7 @@ tasks.processResources {
         "updater_target" to project.property("updater_target"),
         "mixin_java_compatibility" to project.property("mixin_java_compatibility"),
         "pack_format" to project.property("pack_format"),
+        "fast_restart_mixins" to project.property("fast_restart_mixins"),
     )
     inputs.properties(props)
     filesMatching(
@@ -85,7 +96,18 @@ tasks.withType<KotlinCompile>().configureEach {
     compilerOptions.jvmTarget.set(JvmTarget.fromTarget(targetJavaVersion.toString()))
 }
 
+tasks.named<KotlinCompile>("compileKotlin") {
+    dependsOn(tasks.named(handoffJava.compileJavaTaskName))
+    libraries.from(handoffJava.output.classesDirs)
+}
+
+tasks.named<JavaCompile>("compileJava") {
+    classpath += handoffJava.output
+}
+
 tasks.named<Jar>("jar") {
+    dependsOn(tasks.named(handoffJava.classesTaskName))
+    from(handoffJava.output)
     from("../LICENSE") { rename { "${it}_${project.property("archives_base_name")}" } }
     exclude("META-INF/MANIFEST.MF")
     manifest {
@@ -96,6 +118,9 @@ tasks.named<Jar>("jar") {
             "Implementation-Title" to project.name,
             "Implementation-Version" to project.version,
             "Implementation-Vendor" to project.property("mod_author"),
+            "Premain-Class" to "com.github.fanziyun.updater.handoff.StagedModsAgent",
+            "Can-Redefine-Classes" to "false",
+            "Can-Retransform-Classes" to "false",
         )
     }
     finalizedBy("reobfJar")

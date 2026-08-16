@@ -1,12 +1,19 @@
 package com.github.fanziyun.updater.merge
 
+import com.github.fanziyun.updater.data.ClientEnvironment
+import com.github.fanziyun.updater.data.FileHashes
+import com.github.fanziyun.updater.data.PackageFile
+import com.github.fanziyun.updater.data.PackageFileSource
 import com.github.fanziyun.updater.data.PackageSnapshot
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
+import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class PackageMergerTest {
@@ -239,4 +246,165 @@ class PackageMergerTest {
 
         assertTrue(exception.message.orEmpty().contains("regular files"))
     }
+
+    @Test
+    fun `plans managed mod additions updates and removals without touching local extras`() {
+        val gameDir = Files.createTempDirectory("363updater-mod-plan")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("updated.jar"), "old".toByteArray())
+        Files.write(mods.resolve("removed.jar"), "removed".toByteArray())
+        Files.write(mods.resolve("local-extra.jar"), "user".toByteArray())
+        val old = managedSnapshot(
+            "1.0.0",
+            managed("mods/updated.jar", "old"),
+            managed("mods/removed.jar", "removed"),
+        )
+        val target = managedSnapshot(
+            "1.1.0",
+            managed("mods/updated.jar", "new"),
+            managed("mods/added.jar", "added"),
+        )
+
+        val plan = PackageMerger.preview(old, target, MergeOptions(updateManagedMods = true), gameDir)
+
+        assertEquals(FileAction.WRITE, plan.modFiles.single { it.relativePath == "mods/updated.jar" }.action)
+        assertEquals(FileAction.WRITE, plan.modFiles.single { it.relativePath == "mods/added.jar" }.action)
+        assertEquals(FileAction.DELETE, plan.modFiles.single { it.relativePath == "mods/removed.jar" }.action)
+        assertFalse(plan.modFiles.any { it.relativePath == "mods/local-extra.jar" })
+        assertTrue(Files.isRegularFile(mods.resolve("local-extra.jar")))
+        assertEquals(setOf("mods/added.jar", "mods/updated.jar"), plan.managedFiles.keys)
+        assertTrue(plan.requiresRestart)
+        assertTrue(plan.codeChanges)
+    }
+
+    @Test
+    fun `reinstalls a missing required mod instead of reporting a local conflict`() {
+        val gameDir = Files.createTempDirectory("363updater-required-mod")
+        Files.createDirectories(gameDir.resolve("mods"))
+        val old = managedSnapshot("1.0.0", managed("mods/required.jar", "old"))
+        val target = managedSnapshot("1.1.0", managed("mods/required.jar", "new"))
+
+        val plan = PackageMerger.preview(old, target, MergeOptions(updateManagedMods = true), gameDir)
+
+        val file = plan.modFiles.single()
+        assertEquals(FileAction.WRITE, file.action)
+        assertNull(file.expectedCurrentHashes)
+        assertFalse(plan.hasConflicts)
+    }
+
+    @Test
+    fun `continues optional mods only when the old optional file is installed`() {
+        val gameDir = Files.createTempDirectory("363updater-optional-mod")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("selected.jar"), "old-selected".toByteArray())
+        val old = managedSnapshot(
+            "1.0.0",
+            managed("mods/selected.jar", "old-selected", ClientEnvironment.OPTIONAL),
+            managed("mods/not-selected.jar", "old-absent", ClientEnvironment.OPTIONAL),
+        )
+        val target = managedSnapshot(
+            "1.1.0",
+            managed("mods/selected.jar", "new-selected", ClientEnvironment.OPTIONAL),
+            managed("mods/not-selected.jar", "new-absent", ClientEnvironment.OPTIONAL),
+        )
+
+        val plan = PackageMerger.preview(old, target, MergeOptions(updateManagedMods = true), gameDir)
+
+        assertEquals(listOf("mods/selected.jar"), plan.modFiles.map(FilePlan::relativePath))
+        assertTrue(plan.modFiles.single().optional)
+        assertEquals(setOf("mods/selected.jar"), plan.managedFiles.keys)
+    }
+
+    @Test
+    fun `aborts replacement when a previously managed mod was locally modified`() {
+        val gameDir = Files.createTempDirectory("363updater-mod-conflict")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("managed.jar"), "locally-modified".toByteArray())
+        val old = managedSnapshot("1.0.0", managed("mods/managed.jar", "old"))
+        val target = managedSnapshot("1.1.0", managed("mods/managed.jar", "new"))
+
+        val plan = PackageMerger.preview(old, target, MergeOptions(updateManagedMods = true), gameDir)
+
+        assertTrue(plan.hasConflicts)
+        assertEquals(FileAction.UNCHANGED, plan.modFiles.single().action)
+        assertTrue(plan.conflicts.single().contains("locally modified"))
+    }
+
+    @Test
+    fun `rejects a local file collision at a newly managed mod path`() {
+        val gameDir = Files.createTempDirectory("363updater-new-mod-conflict")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("new.jar"), "local".toByteArray())
+        val target = managedSnapshot("1.1.0", managed("mods/new.jar", "package"))
+
+        val plan = PackageMerger.preview(
+            managedSnapshot("1.0.0"),
+            target,
+            MergeOptions(updateManagedMods = true),
+            gameDir,
+        )
+
+        assertTrue(plan.hasConflicts)
+        assertTrue(plan.modFiles.single().conflict.orEmpty().contains("local file"))
+    }
+
+    @Test
+    fun `keeps the updater jar when the target package removes it`() {
+        val gameDir = Files.createTempDirectory("363updater-self-protection")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("363updater.jar"), "self".toByteArray())
+        val old = managedSnapshot("1.0.0", managed("mods/363updater.jar", "self"))
+
+        val plan = PackageMerger.preview(
+            old,
+            managedSnapshot("1.1.0"),
+            MergeOptions(updateManagedMods = true),
+            gameDir,
+        )
+
+        val file = plan.modFiles.single()
+        assertEquals(FileAction.UNCHANGED, file.action)
+        assertTrue(file.protectedFile)
+        assertEquals(setOf("mods/363updater.jar"), plan.managedFiles.keys)
+    }
+
+    @Test
+    fun `leaves managed mods untouched while managed mod updates are disabled`() {
+        val gameDir = Files.createTempDirectory("363updater-disabled-mods")
+        val mods = Files.createDirectories(gameDir.resolve("mods"))
+        Files.write(mods.resolve("managed.jar"), "old".toByteArray())
+        val old = managedSnapshot("1.0.0", managed("mods/managed.jar", "old"))
+        val target = managedSnapshot("1.1.0", managed("mods/managed.jar", "new"))
+
+        val plan = PackageMerger.preview(old, target, MergeOptions(updateManagedMods = false), gameDir)
+
+        assertTrue(plan.modFiles.isEmpty())
+        assertFalse(plan.requiresRestart)
+        assertEquals(old.managedFiles.getValue("mods/managed.jar").hashes, plan.managedFiles.getValue("mods/managed.jar").hashes)
+    }
+
+    private fun managedSnapshot(version: String, vararg files: PackageFile): PackageSnapshot =
+        PackageSnapshot(version, emptyMap(), files.associateBy(PackageFile::relativePath))
+
+    private fun managed(
+        path: String,
+        content: String,
+        environment: ClientEnvironment = ClientEnvironment.REQUIRED,
+    ): PackageFile {
+        val bytes = content.toByteArray()
+        return PackageFile(
+            relativePath = path,
+            size = bytes.size.toLong(),
+            hashes = FileHashes(
+                sha1 = digest(bytes, "SHA-1"),
+                sha512 = digest(bytes, "SHA-512"),
+            ),
+            environment = environment,
+            source = PackageFileSource.OVERRIDE,
+            embeddedBytes = bytes,
+        )
+    }
+
+    private fun digest(bytes: ByteArray, algorithm: String): String =
+        MessageDigest.getInstance(algorithm).digest(bytes).joinToString("") { "%02x".format(it) }
 }

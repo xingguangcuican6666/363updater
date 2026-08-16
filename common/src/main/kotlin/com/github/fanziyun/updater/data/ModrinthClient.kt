@@ -1,6 +1,7 @@
 package com.github.fanziyun.updater.data
 
 import com.github.fanziyun.updater.Updater
+import com.github.fanziyun.updater.BuildInfo
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -51,7 +52,7 @@ class ModrinthClient(private val timeoutMs: Int, configuredApiRoot: String = DEF
         const val DEFAULT_API_ROOT = "https://api.modrinth.com/v2"
         const val MAX_METADATA_BYTES = 8L * 1024L * 1024L
         const val MAX_PACKAGE_BYTES = 128L * 1024L * 1024L
-        const val USER_AGENT = "363Updater/0.1.0"
+        val USER_AGENT: String get() = "363Updater/${BuildInfo.modVersion}"
 
         internal fun normalizeApiRoot(configured: String): String {
             val normalized = configured.trim().ifBlank { DEFAULT_API_ROOT }.trimEnd('/')

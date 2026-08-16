@@ -1,6 +1,7 @@
 package com.github.fanziyun.updater.screen
 
 import com.github.fanziyun.updater.UpdaterService
+import com.github.fanziyun.updater.data.ApplyResult
 import com.github.fanziyun.updater.merge.FileAction
 import com.github.fanziyun.updater.merge.KeyAction
 import com.github.fanziyun.updater.merge.UpdatePlan
@@ -19,6 +20,7 @@ class UpdateDiffScreen(
     private var loading = true
     private var detailLines: List<RenderLine> = emptyList()
     private var scroll = 0
+    private var codeConfirmed = false
 
     private data class RenderLine(val text: String, val color: Int)
 
@@ -48,8 +50,8 @@ class UpdateDiffScreen(
                     plan = result
                     detailLines = buildLines(result)
                     scroll = 0
-                    updateButton?.active = true
-                    if (applyAfterLoad) applyUpdate()
+                    updateButton?.active = !result.hasConflicts && result.changedFiles.isNotEmpty()
+                    if (applyAfterLoad && !result.codeChanges && !result.hasConflicts) applyUpdate()
                 }
             }
         }
@@ -57,6 +59,12 @@ class UpdateDiffScreen(
 
     private fun applyUpdate() {
         val currentPlan = plan ?: return
+        if (currentPlan.hasConflicts) return
+        if (currentPlan.codeChanges && !codeConfirmed) {
+            codeConfirmed = true
+            updateButton?.message = Component.translatable("screen.updater363.apply_code_confirm")
+            return
+        }
         updateButton?.active = false
         UpdaterService.apply(currentPlan).whenComplete { result, exception ->
             ClientScreens.execute {
@@ -65,12 +73,18 @@ class UpdateDiffScreen(
                     error = exception.cause?.message ?: exception.message ?: "Update failed"
                     updateButton?.active = true
                 } else {
-                    ClientScreens.set(
-                        UpdateResultScreen(UpdateScreenNavigation.resultParent(parentScreen), result.reloadFailures),
-                    )
+                    showResult(result)
                 }
             }
         }
+    }
+
+    private fun showResult(result: ApplyResult) {
+        val destination = UpdateScreenNavigation.resultParent(parentScreen)
+        ClientScreens.set(
+            if (result.requiresRestart) RestartChoiceScreen(destination)
+            else UpdateResultScreen(destination, result.reloadFailures),
+        )
     }
 
     override fun onClose() {

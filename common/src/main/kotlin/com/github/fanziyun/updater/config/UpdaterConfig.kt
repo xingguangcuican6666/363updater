@@ -58,9 +58,21 @@ class UpdaterConfig : ConfigData {
     @ConfigEntry.Category("advanced")
     var allowUnknownFormatReplacement: Boolean = false
 
-    @Comment("Attempt experimental runtime config reload after files are updated")
+    @Comment("Download and update mods managed by the selected mrpack; code executes only in a new JVM")
+    @ConfigEntry.Category("restart")
+    var updateManagedMods: Boolean = false
+
+    @Comment("Experimental Linux/Windows two-process restart handoff for supported build profiles")
+    @ConfigEntry.Category("restart")
+    var experimentalFastRestart: Boolean = false
+
+    @Comment("Reduce temporary work in the old process while a replacement starts; this cannot unload mods or render resources")
+    @ConfigEntry.Category("restart")
+    var trimOldProcessDuringRestart: Boolean = true
+
+    @Comment("Legacy config-only runtime reload; managed mod changes always require a new JVM")
     @ConfigEntry.Category("advanced")
-    var experimentalHotReload: Boolean = true
+    var experimentalHotReload: Boolean = false
 
     @Comment("Current Modrinth version override; blank uses changelog363.json or updater state")
     @ConfigEntry.Category("advanced")

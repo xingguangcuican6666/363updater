@@ -9,6 +9,8 @@ interface Platform {
     val gameDir: Path
     val loaderId: String
     val minecraftVersion: String get() = BuildInfo.minecraftVersion
+    val protectedModPaths: Set<String> get() = emptySet()
+    val selfJar: Path? get() = null
 
     companion object {
         val INSTANCE: Platform by lazy {

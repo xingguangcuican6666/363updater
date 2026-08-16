@@ -1,6 +1,7 @@
 package com.github.fanziyun.updater.screen
 
 import com.github.fanziyun.updater.UpdaterService
+import com.github.fanziyun.updater.data.ApplyResult
 import com.github.fanziyun.updater.merge.FileAction
 import com.github.fanziyun.updater.merge.KeyAction
 import com.github.fanziyun.updater.merge.UpdatePlan
@@ -19,6 +20,7 @@ class UpdateDiffScreen(
     private var loading = true
     private var detailLines: List<RenderLine> = emptyList()
     private var scroll = 0
+    private var codeConfirmed = false
 
     private data class RenderLine(val text: String, val color: Int)
 
@@ -49,8 +51,8 @@ class UpdateDiffScreen(
                     plan = result
                     detailLines = buildLines(result)
                     scroll = 0
-                    updateButton?.active = true
-                    if (applyAfterLoad) applyUpdate()
+                    updateButton?.active = !result.hasConflicts && result.changedFiles.isNotEmpty()
+                    if (applyAfterLoad && !result.codeChanges && !result.hasConflicts) applyUpdate()
                 }
             }
         }
@@ -58,6 +60,12 @@ class UpdateDiffScreen(
 
     private fun applyUpdate() {
         val currentPlan = plan ?: return
+        if (currentPlan.hasConflicts) return
+        if (currentPlan.codeChanges && !codeConfirmed) {
+            codeConfirmed = true
+            updateButton?.message = Component.translatable("screen.updater363.apply_code_confirm")
+            return
+        }
         updateButton?.active = false
         UpdaterService.apply(currentPlan).whenComplete { result, exception ->
             ClientScreens.execute {
@@ -66,12 +74,18 @@ class UpdateDiffScreen(
                     error = exception.cause?.message ?: exception.message ?: "Update failed"
                     updateButton?.active = true
                 } else {
-                    ClientScreens.set(
-                        UpdateResultScreen(UpdateScreenNavigation.resultParent(parentScreen), result.reloadFailures),
-                    )
+                    showResult(result)
                 }
             }
         }
+    }
+
+    private fun showResult(result: ApplyResult) {
+        val destination = UpdateScreenNavigation.resultParent(parentScreen)
+        ClientScreens.set(
+            if (result.requiresRestart) RestartChoiceScreen(destination)
+            else UpdateResultScreen(destination, result.reloadFailures),
+        )
     }
 
     override fun onClose() {
@@ -128,11 +142,51 @@ class UpdateDiffScreen(
             "keys ~${plan.updatedKeys} =${plan.preservedKeys} +${plan.addedKeys} -${plan.removedKeys}",
             0xFFAAAAAA.toInt(),
         ))
+        if (plan.downloadBytes > 0L) add(RenderLine("download ${humanBytes(plan.downloadBytes)}", 0xFFAAAAAA.toInt()))
+        if (plan.codeChanges) add(RenderLine(
+            Component.translatable("screen.updater363.code_warning").string,
+            0xFFFFAA00.toInt(),
+        ))
+        if (plan.hasConflicts) add(RenderLine(
+            Component.translatable("screen.updater363.conflicts", plan.conflicts.size).string,
+            0xFFFF5555.toInt(),
+        ))
         add(RenderLine("", 0xFFFFFFFF.toInt()))
-        plan.displayedFiles.forEach { file ->
-            val marker = if (file.action == FileAction.DELETE) "-" else "~"
-            val color = if (file.action == FileAction.DELETE) 0xFFFF5555.toInt() else 0xFF55AAFF.toInt()
+        listOf(
+            Component.translatable("screen.updater363.section.mods").string to plan.displayedFiles.filter { it.managedMod },
+            Component.translatable("screen.updater363.section.options").string to plan.displayedFiles.filter { it.relativePath == "options.txt" },
+            Component.translatable("screen.updater363.section.config").string to plan.displayedFiles.filter {
+                !it.managedMod && it.relativePath != "options.txt"
+            },
+        ).forEach { (section, files) ->
+            if (files.isEmpty()) return@forEach
+            add(RenderLine("[$section]", 0xFFFFFFFF.toInt()))
+            files.forEach { file ->
+            val marker = when (file.action) {
+                FileAction.WRITE -> if (file.expectedCurrent == null && file.expectedCurrentHashes == null) "+" else "~"
+                FileAction.DELETE -> "-"
+                FileAction.UNCHANGED -> "="
+            }
+            val color = when {
+                file.hasConflict() -> 0xFFFF5555.toInt()
+                file.protectedFile -> 0xFFFFAA00.toInt()
+                file.action == FileAction.DELETE -> 0xFFFF5555.toInt()
+                else -> 0xFF55AAFF.toInt()
+            }
             add(RenderLine("$marker ${file.relativePath}", color))
+            if (file.managedMod) {
+                val hash = (file.targetHashes?.sha512 ?: file.targetHashes?.sha1 ?: file.expectedCurrentHashes?.preferredKey())
+                    ?.take(20) ?: "-"
+                val details = buildList {
+                    add(humanBytes(file.size))
+                    add("hash $hash")
+                    file.sourceHost?.let { add(it) }
+                    if (file.optional) add("optional")
+                    if (file.protectedFile) add("protected")
+                }.joinToString(" | ")
+                add(RenderLine("  $details", 0xFFAAAAAA.toInt()))
+            }
+            file.conflict?.let { add(RenderLine("  ! $it", 0xFFFF5555.toInt())) }
             file.warning?.let { add(RenderLine("  ! $it", 0xFFFFAA00.toInt())) }
             file.changes.forEach { change ->
                 val (keyMarker, keyColor) = when (change.action) {
@@ -143,7 +197,16 @@ class UpdateDiffScreen(
                 }
                 add(RenderLine("    $keyMarker ${change.key}", keyColor))
             }
+            }
+            add(RenderLine("", 0xFFFFFFFF.toInt()))
         }
+    }
+
+    private fun humanBytes(bytes: Long): String = when {
+        bytes >= 1024L * 1024L * 1024L -> "%.1f GiB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+        bytes >= 1024L * 1024L -> "%.1f MiB".format(bytes / (1024.0 * 1024.0))
+        bytes >= 1024L -> "%.1f KiB".format(bytes / 1024.0)
+        else -> "$bytes B"
     }
 
     private fun maxScroll(): Int = (detailLines.size * 12 - (height - 90)).coerceAtLeast(0)

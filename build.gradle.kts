@@ -76,5 +76,12 @@ subprojects {
 
     tasks.withType<Jar>().configureEach {
         from(rootProject.file("LICENSE")) { rename { "${it}_${rootProject.property("archives_base_name")}" } }
+        manifest {
+            attributes(
+                "Premain-Class" to "com.github.fanziyun.updater.handoff.StagedModsAgent",
+                "Can-Redefine-Classes" to "false",
+                "Can-Retransform-Classes" to "false",
+            )
+        }
     }
 }

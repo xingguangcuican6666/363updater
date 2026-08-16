@@ -12,4 +12,5 @@ object BuildInfo {
 
     val minecraftVersion: String get() = properties.getProperty("minecraftVersion")
     val targetProfile: String get() = properties.getProperty("targetProfile")
+    val modVersion: String get() = properties.getProperty("modVersion")
 }

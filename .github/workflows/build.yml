@@ -26,17 +26,20 @@ jobs:
         include:
           - target: 1.20.1-fabric
             label: Minecraft 1.20.1 Fabric
-            java: "17"
+            java: "21"
+            forge_java: ""
             artifact: 363updater-1.20.1-fabric
             output: fabric/build/libs/363updater-1.20.1-fabric-*.jar
           - target: 1.20.1-forge
             label: Minecraft 1.20.1 Forge
-            java: "17"
+            java: "21"
+            forge_java: "17"
             artifact: 363updater-1.20.1-forge
             output: forge/build/libs/363updater-1.20.1-forge-*.jar
           - target: 1.21.1
             label: Minecraft 1.21.1 Fabric and NeoForge
             java: "21"
+            forge_java: ""
             artifact: 363updater-1.21.1
             output: |
               fabric/build/libs/363updater-1.21.1-fabric-*.jar
@@ -44,6 +47,7 @@ jobs:
           - target: 26.1.2
             label: Minecraft 26.1.2 Fabric and NeoForge
             java: "25"
+            forge_java: ""
             artifact: 363updater-26.1.2
             output: |
               fabric/build/libs/363updater-26.1.2-fabric-*.jar
@@ -51,6 +55,7 @@ jobs:
           - target: 26.2
             label: Minecraft 26.2 Fabric and NeoForge
             java: "25"
+            forge_java: ""
             artifact: 363updater-26.2
             output: |
               fabric/build/libs/363updater-26.2-fabric-*.jar
@@ -60,7 +65,15 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
-      - name: Set up Java ${{ matrix.java }}
+      - name: Set up Forge Java ${{ matrix.forge_java }}
+        if: matrix.forge_java != ''
+        id: forge_java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.forge_java }}
+
+      - name: Set up Gradle Java ${{ matrix.java }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -72,7 +85,7 @@ jobs:
       - name: Build ${{ matrix.target }}
         shell: bash
         run: |
-          UPDATER_FORGE_JAVA_HOME="$JAVA_HOME" \
+          UPDATER_FORGE_JAVA_HOME="${{ steps.forge_java.outputs.path || env.JAVA_HOME }}" \
             ./gradlew build "-Pupdater_target=${{ matrix.target }}" --stacktrace
 
       - name: Upload ${{ matrix.artifact }}

@@ -8,6 +8,7 @@ import com.github.fanziyun.updater.merge.UpdatePlan
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.input.MouseButtonEvent
 import net.minecraft.network.chat.Component
 
 class UpdateDiffScreen(
@@ -19,7 +20,7 @@ class UpdateDiffScreen(
     private var updateButton: Button? = null
     private var loading = true
     private var detailLines: List<RenderLine> = emptyList()
-    private var scroll = 0
+    private val scrollbar = DiffScrollbarState()
     private var codeConfirmed = false
 
     private data class RenderLine(val text: String, val color: Int)
@@ -51,7 +52,7 @@ class UpdateDiffScreen(
                 else {
                     plan = result
                     detailLines = buildLines(result)
-                    scroll = 0
+                    scrollbar.update(detailLines.size * 12, height - 90)
                     updateButton?.active = !result.hasConflicts && result.changedFiles.isNotEmpty()
                     if (applyAfterLoad && !result.codeChanges && !result.hasConflicts) applyUpdate()
                 }
@@ -94,6 +95,29 @@ class UpdateDiffScreen(
         ClientScreens.set(parentScreen)
     }
 
+    override fun mouseClicked(event: MouseButtonEvent, doubleClick: Boolean): Boolean {
+        if (event.button() == 0 && scrollbar.visible) {
+            val top = 45
+            val trackHeight = height - 90
+            val trackX = width - 20
+            if (event.x().toInt() in trackX until trackX + 6 && event.y().toInt() in top until top + trackHeight) {
+                scrollbar.clickTrack(top, trackHeight, event.y().toInt())
+                return true
+            }
+        }
+        return super.mouseClicked(event, doubleClick)
+    }
+
+    override fun mouseReleased(event: MouseButtonEvent): Boolean {
+        if (event.button() == 0) scrollbar.release()
+        return super.mouseReleased(event)
+    }
+
+    override fun mouseDragged(event: MouseButtonEvent, dragX: Double, dragY: Double): Boolean {
+        if (event.button() == 0 && scrollbar.dragTo(45, height - 90, event.y().toInt())) return true
+        return super.mouseDragged(event, dragX, dragY)
+    }
+
     override fun extractRenderState(graphics: GuiGraphicsExtractor, mouseX: Int, mouseY: Int, partialTick: Float) {
         super.extractRenderState(graphics, mouseX, mouseY, partialTick)
         val heading = title.string
@@ -114,8 +138,9 @@ class UpdateDiffScreen(
     }
 
     override fun mouseScrolled(mouseX: Double, mouseY: Double, scrollX: Double, scrollY: Double): Boolean {
+        scrollbar.update(detailLines.size * 12, height - 90)
         if (mouseY.toInt() in 45 until height - 45 && detailLines.isNotEmpty()) {
-            scroll = (scroll - (scrollY * 30).toInt()).coerceIn(0, maxScroll())
+            scrollbar.scrollBy(-(scrollY * 30).toInt())
             return true
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
@@ -128,13 +153,21 @@ class UpdateDiffScreen(
     private fun renderDetails(graphics: GuiGraphicsExtractor) {
         val top = 45
         val bottom = height - 45
-        graphics.enableScissor(14, top, width - 14, bottom)
-        var y = top - scroll
+        val trackX = width - 20
+        scrollbar.update(detailLines.size * 12, bottom - top)
+        val contentRight = if (scrollbar.visible) trackX - 4 else width - 14
+        graphics.enableScissor(14, top, contentRight, bottom)
+        var y = top - scrollbar.offset
         detailLines.forEach { line ->
-            if (y + 12 >= top && y < bottom) graphics.text(font, fit(line.text, width - 40), 20, y, line.color)
+            if (y + 12 >= top && y < bottom) graphics.text(font, fit(line.text, contentRight - 20), 20, y, line.color)
             y += 12
         }
         graphics.disableScissor()
+        if (scrollbar.visible) {
+            graphics.fill(trackX, top, trackX + 6, bottom, 0x55444444)
+            val thumbTop = scrollbar.thumbTop(top, bottom - top)
+            graphics.fill(trackX, thumbTop, trackX + 6, thumbTop + scrollbar.thumbHeight(bottom - top), 0xFFAAAAAA.toInt())
+        }
     }
 
     private fun buildLines(plan: UpdatePlan): List<RenderLine> = buildList {
@@ -221,8 +254,6 @@ class UpdateDiffScreen(
         bytes >= 1024L -> "%.1f KiB".format(bytes / 1024.0)
         else -> "$bytes B"
     }
-
-    private fun maxScroll(): Int = (detailLines.size * 12 - (height - 90)).coerceAtLeast(0)
 
     private fun fit(text: String, maxWidth: Int): String {
         if (font.width(text) <= maxWidth) return text

@@ -93,6 +93,7 @@ object UpdaterService {
     fun configScreen(parent: Screen?): Screen {
         val holder = AutoConfig.getConfigHolder(UpdaterConfig::class.java)
         val value = holder.config
+        val defaults = UpdaterConfig()
         val builder = ConfigBuilder.create()
             .setParentScreen(parent)
             .setTitle(Component.translatable("text.autoconfig.updater363.title"))
@@ -102,47 +103,50 @@ object UpdaterService {
         val advanced = builder.getOrCreateCategory(Component.translatable("text.autoconfig.updater363.category.advanced"))
         val restart = builder.getOrCreateCategory(Component.translatable("text.autoconfig.updater363.category.restart"))
 
-        fun string(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: String, save: (String) -> Unit) {
+        fun string(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: String, default: String, save: (String) -> Unit) {
             category.addEntry(entries.startStrField(Component.translatable("text.autoconfig.updater363.option.$key"), current)
+                .setDefaultValue(default)
                 .setSaveConsumer(save)
                 .build())
         }
 
-        fun toggle(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: Boolean, save: (Boolean) -> Unit) {
+        fun toggle(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: Boolean, default: Boolean, save: (Boolean) -> Unit) {
             category.addEntry(entries.startBooleanToggle(Component.translatable("text.autoconfig.updater363.option.$key"), current)
+                .setDefaultValue(default)
                 .setSaveConsumer(save)
                 .build())
         }
 
-        fun integer(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: Int, min: Int, max: Int, save: (Int) -> Unit) {
+        fun integer(category: me.shedaniel.clothconfig2.api.ConfigCategory, key: String, current: Int, default: Int, min: Int, max: Int, save: (Int) -> Unit) {
             category.addEntry(entries.startIntSlider(Component.translatable("text.autoconfig.updater363.option.$key"), current, min, max)
+                .setDefaultValue(default)
                 .setSaveConsumer(save)
                 .build())
         }
 
-        string(basic, "modrinthProject", value.modrinthProject) { value.modrinthProject = it }
-        string(basic, "minecraftVersion", value.minecraftVersion) { value.minecraftVersion = it }
-        string(basic, "loader", value.loader) { value.loader = it }
-        string(basic, "versionChannels", value.versionChannels) { value.versionChannels = it }
-        toggle(basic, "autoCheck", value.autoCheck) { value.autoCheck = it }
-        integer(basic, "checkIntervalMinutes", value.checkIntervalMinutes, 5, 1440) { value.checkIntervalMinutes = it }
+        string(basic, "modrinthProject", value.modrinthProject, defaults.modrinthProject) { value.modrinthProject = it }
+        string(basic, "minecraftVersion", value.minecraftVersion, defaults.minecraftVersion) { value.minecraftVersion = it }
+        string(basic, "loader", value.loader, defaults.loader) { value.loader = it }
+        string(basic, "versionChannels", value.versionChannels, defaults.versionChannels) { value.versionChannels = it }
+        toggle(basic, "autoCheck", value.autoCheck, defaults.autoCheck) { value.autoCheck = it }
+        integer(basic, "checkIntervalMinutes", value.checkIntervalMinutes, defaults.checkIntervalMinutes, 5, 1440) { value.checkIntervalMinutes = it }
 
-        integer(advanced, "networkTimeoutSeconds", value.networkTimeoutSeconds, 5, 120) { value.networkTimeoutSeconds = it }
-        string(advanced, "modrinthApiRoot", value.modrinthApiRoot) { value.modrinthApiRoot = it }
-        integer(advanced, "backupCount", value.backupCount, 1, 10) { value.backupCount = it }
-        toggle(advanced, "cachePackages", value.cachePackages) { value.cachePackages = it }
-        toggle(advanced, "allowTargetDeletes", value.allowTargetDeletes) { value.allowTargetDeletes = it }
-        toggle(advanced, "allowUnknownFormatReplacement", value.allowUnknownFormatReplacement) { value.allowUnknownFormatReplacement = it }
-        toggle(advanced, "experimentalHotReload", value.experimentalHotReload) { value.experimentalHotReload = it }
-        string(advanced, "currentVersionOverride", value.currentVersionOverride) { value.currentVersionOverride = it }
-        toggle(advanced, "syncChangelog363Version", value.syncChangelog363Version) { value.syncChangelog363Version = it }
-        string(advanced, "targetVersionOverride", value.targetVersionOverride) { value.targetVersionOverride = it }
+        integer(advanced, "networkTimeoutSeconds", value.networkTimeoutSeconds, defaults.networkTimeoutSeconds, 5, 120) { value.networkTimeoutSeconds = it }
+        string(advanced, "modrinthApiRoot", value.modrinthApiRoot, defaults.modrinthApiRoot) { value.modrinthApiRoot = it }
+        integer(advanced, "backupCount", value.backupCount, defaults.backupCount, 1, 10) { value.backupCount = it }
+        toggle(advanced, "cachePackages", value.cachePackages, defaults.cachePackages) { value.cachePackages = it }
+        toggle(advanced, "allowTargetDeletes", value.allowTargetDeletes, defaults.allowTargetDeletes) { value.allowTargetDeletes = it }
+        toggle(advanced, "allowUnknownFormatReplacement", value.allowUnknownFormatReplacement, defaults.allowUnknownFormatReplacement) { value.allowUnknownFormatReplacement = it }
+        toggle(advanced, "experimentalHotReload", value.experimentalHotReload, defaults.experimentalHotReload) { value.experimentalHotReload = it }
+        string(advanced, "currentVersionOverride", value.currentVersionOverride, defaults.currentVersionOverride) { value.currentVersionOverride = it }
+        toggle(advanced, "syncChangelog363Version", value.syncChangelog363Version, defaults.syncChangelog363Version) { value.syncChangelog363Version = it }
+        string(advanced, "targetVersionOverride", value.targetVersionOverride, defaults.targetVersionOverride) { value.targetVersionOverride = it }
 
-        toggle(restart, "updateManagedMods", value.updateManagedMods) { value.updateManagedMods = it }
+        toggle(restart, "updateManagedMods", value.updateManagedMods, defaults.updateManagedMods) { value.updateManagedMods = it }
         if (supportsFastRestartProfile()) {
-            toggle(restart, "experimentalFastRestart", value.experimentalFastRestart) { value.experimentalFastRestart = it }
+            toggle(restart, "experimentalFastRestart", value.experimentalFastRestart, defaults.experimentalFastRestart) { value.experimentalFastRestart = it }
         }
-        toggle(restart, "trimOldProcessDuringRestart", value.trimOldProcessDuringRestart) { value.trimOldProcessDuringRestart = it }
+        toggle(restart, "trimOldProcessDuringRestart", value.trimOldProcessDuringRestart, defaults.trimOldProcessDuringRestart) { value.trimOldProcessDuringRestart = it }
         builder.setSavingRunnable { holder.save() }
         return builder.build()
     }

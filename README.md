@@ -1,6 +1,6 @@
 # 363Updater
 
-客户端 Minecraft modpack 更新器（当前版本 `0.2.0`）。它从 Modrinth 获取兼容的 `.mrpack`，比较当前包和目标包，并以事务方式更新受管模组、`config/**` 与 `options.txt`。
+客户端 Minecraft modpack 更新器（当前版本 `0.2.1`）。它从 Modrinth 获取兼容的 `.mrpack`，比较当前包和目标包，并以事务方式更新受管模组、`config/**` 与 `options.txt`。
 
 ## 当前实现
 
@@ -33,12 +33,12 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 
 运行时从平台适配层读取 Minecraft 版本和加载器，然后筛选 Modrinth 版本。当前版本必须能在 Modrinth 中精确找到；找不到时会停止更新，不根据日期猜测基线。
 
-0.2.0 的快速重启矩阵覆盖以下 8 个发行产物：
+0.2.1 的快速重启矩阵覆盖以下 8 个发行产物：
 
 | Minecraft | 加载器 | 产物 |
 |---|---|---|
-| 1.20.1 | Fabric | `fabric/build/libs/363updater-1.20.1-fabric-0.2.0.jar` |
-| 1.20.1 | Forge | `forge/build/libs/363updater-1.20.1-forge-0.2.0.jar` |
+| 1.20.1 | Fabric | `fabric/build/libs/363updater-1.20.1-fabric-0.2.1.jar` |
+| 1.20.1 | Forge | `forge/build/libs/363updater-1.20.1-forge-0.2.1.jar` |
 | 1.21.1 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
 | 26.1.2 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
 | 26.2 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
@@ -60,9 +60,9 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 
 产物位于：
 
-- Fabric: `fabric/build/libs/363updater-<mc>-fabric-0.2.0.jar`
-- NeoForge: `neoforge/build/libs/363updater-<mc>-neoforge-0.2.0.jar`
-- Forge 1.20.1: `forge/build/libs/363updater-1.20.1-forge-0.2.0.jar`
+- Fabric: `fabric/build/libs/363updater-<mc>-fabric-0.2.1.jar`
+- NeoForge: `neoforge/build/libs/363updater-<mc>-neoforge-0.2.1.jar`
+- Forge 1.20.1: `forge/build/libs/363updater-1.20.1-forge-0.2.1.jar`
 
 26.x/1.21.1 使用根项目的 Gradle 9 构建。Forge 1.20.1 会由根任务自动切换到仓库内的 Gradle 8.8 子构建；如 JDK 17 不在常见系统路径，可设置 `UPDATER_FORGE_JAVA_HOME`。
 

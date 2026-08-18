@@ -13,6 +13,7 @@ import com.github.fanziyun.updater.merge.MergeOptions
 import com.github.fanziyun.updater.merge.PackageMerger
 import com.github.fanziyun.updater.merge.UpdatePlan
 import com.github.fanziyun.updater.platform.Platform
+import com.github.fanziyun.updater.platform.RuntimeEnvironment
 import com.github.fanziyun.updater.handoff.HandoffChildSession
 import com.github.fanziyun.updater.handoff.HandoffProtocol
 import com.github.fanziyun.updater.handoff.RestartCapabilities
@@ -72,6 +73,9 @@ object UpdaterService {
         if (!initialized.compareAndSet(false, true)) return
         AutoConfig.register(UpdaterConfig::class.java) { definition, clazz -> GsonConfigSerializer(definition, clazz) }
         config = AutoConfig.getConfigHolder(UpdaterConfig::class.java).config
+        if (RuntimeEnvironment.isAndroid && config.updateManagedMods) {
+            Updater.LOGGER.warn("Managed mod updates are disabled on Android")
+        }
         recoverHelperCommits()
         if (HandoffChildSession.active) {
             activeTransactionId = HandoffChildSession.transactionId
@@ -142,7 +146,9 @@ object UpdaterService {
         toggle(advanced, "syncChangelog363Version", value.syncChangelog363Version, defaults.syncChangelog363Version) { value.syncChangelog363Version = it }
         string(advanced, "targetVersionOverride", value.targetVersionOverride, defaults.targetVersionOverride) { value.targetVersionOverride = it }
 
-        toggle(restart, "updateManagedMods", value.updateManagedMods, defaults.updateManagedMods) { value.updateManagedMods = it }
+        if (!RuntimeEnvironment.isAndroid) {
+            toggle(restart, "updateManagedMods", value.updateManagedMods, defaults.updateManagedMods) { value.updateManagedMods = it }
+        }
         if (supportsFastRestartProfile()) {
             toggle(restart, "experimentalFastRestart", value.experimentalFastRestart, defaults.experimentalFastRestart) { value.experimentalFastRestart = it }
         }
@@ -217,7 +223,7 @@ object UpdaterService {
                     MergeOptions(
                         allowTargetDeletes = config.allowTargetDeletes,
                         allowUnknownFormatReplacement = config.allowUnknownFormatReplacement,
-                        updateManagedMods = config.updateManagedMods,
+                        updateManagedMods = managedModUpdatesEnabled(),
                         installedManagedFiles = installation?.managedFiles.orEmpty(),
                         protectedPaths = Platform.INSTANCE.protectedModPaths,
                     ),
@@ -240,6 +246,9 @@ object UpdaterService {
 
     fun apply(updatePlan: UpdatePlan = plan ?: error("Open the difference view before updating")): CompletableFuture<ApplyResult> =
         CompletableFuture.supplyAsync({
+            check(!RuntimeEnvironment.isAndroid || updatePlan.modFiles.isEmpty()) {
+                "Managed mod updates are disabled on Android; reopen the difference view"
+            }
             val result = UpdateExecutor.apply(updatePlan, config)
             refreshConfigReference()
             plan = null
@@ -350,6 +359,8 @@ object UpdaterService {
             Platform.INSTANCE.loaderId,
             System.getProperty("os.name", ""),
         )
+
+    private fun managedModUpdatesEnabled(): Boolean = config.updateManagedMods && !RuntimeEnvironment.isAndroid
 
     private fun recoverHelperCommits() {
         val manager = transactionManager()

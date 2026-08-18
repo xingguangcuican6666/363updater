@@ -5,6 +5,7 @@ import com.github.fanziyun.updater.data.ClientEnvironment
 import com.github.fanziyun.updater.data.PackageFile
 import com.github.fanziyun.updater.data.PackageSnapshot
 import com.github.fanziyun.updater.platform.Platform
+import com.github.fanziyun.updater.platform.RuntimeEnvironment
 import com.github.fanziyun.updater.util.PathSafety
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
@@ -24,7 +25,7 @@ object PackageMerger {
         MergeOptions(
             allowTargetDeletes = config.allowTargetDeletes,
             allowUnknownFormatReplacement = config.allowUnknownFormatReplacement,
-            updateManagedMods = config.updateManagedMods,
+            updateManagedMods = config.updateManagedMods && !RuntimeEnvironment.isAndroid,
         ),
         gameDir,
     )

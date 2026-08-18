@@ -72,7 +72,7 @@ class UpdaterConfig : ConfigData {
 
     @Comment("Legacy config-only runtime reload; managed mod changes always require a new JVM")
     @ConfigEntry.Category("advanced")
-    var experimentalHotReload: Boolean = false
+    var experimentalHotReload: Boolean = true
 
     @Comment("Current Modrinth version override; blank uses changelog363.json or updater state")
     @ConfigEntry.Category("advanced")

@@ -26,6 +26,8 @@ data class ProgressViewModel(
     val headlineArg: String,
     val fileCaption: String,
     val fileFraction: Double,
+    /** Shown in place of [fileCaption] while no single file is in progress. */
+    val filePlaceholderKey: String,
     val totalCaption: String,
     val totalFraction: Double,
     val statusKey: String,
@@ -52,14 +54,21 @@ data class ProgressViewModel(
                 }
             }
             val hasFile = progress.fileLabel.isNotBlank()
+            val finished = progress.phase == UpdatePhase.DONE
             return ProgressViewModel(
                 phase = progress.phase,
                 headlineKey = if (hasFile) "screen.updater363.progress.file" else progress.phase.translationKey(),
                 headlineArg = if (hasFile) progress.fileLabel else progress.message,
                 fileCaption = fileCaption,
-                fileFraction = progress.fileFraction,
+                // A finished run has no file left to meter, so show both bars full rather than empty.
+                fileFraction = if (finished) 1.0 else progress.fileFraction,
+                filePlaceholderKey = when (progress.phase) {
+                    UpdatePhase.DONE -> "screen.updater363.progress.file_done"
+                    UpdatePhase.FAILED -> "screen.updater363.progress.file_stopped"
+                    else -> "screen.updater363.progress.unknown"
+                },
                 totalCaption = totalCaption,
-                totalFraction = progress.totalFraction,
+                totalFraction = if (finished) 1.0 else progress.totalFraction,
                 statusKey = when {
                     progress.phase == UpdatePhase.FAILED -> "screen.updater363.error"
                     progress.message.isNotBlank() -> "screen.updater363.progress.status"
@@ -67,7 +76,7 @@ data class ProgressViewModel(
                 },
                 statusArg = progress.message,
                 failed = progress.phase == UpdatePhase.FAILED,
-                finished = progress.phase == UpdatePhase.DONE,
+                finished = finished,
             )
         }
 

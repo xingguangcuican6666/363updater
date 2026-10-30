@@ -90,11 +90,23 @@ object UpdateProgressTracker {
         mutate { it.copy(doneBytes = next) }
     }
 
-    /** Mark one file (or one staging step) finished. */
+    /**
+     * Mark one file (or one staging step) finished.
+     *
+     * The completed file stays on the per-file meter at 100% so the bar visibly fills before the next
+     * [file] call replaces it; without a known size the label is cleared instead of showing `0 / ?`.
+     */
     fun completeItem(label: String = "", bytes: Long = 0L) {
         if (bytes != 0L) addOverallBytes(bytes)
         val next = itemAccumulator.incrementAndGet()
-        mutate { it.copy(doneItems = next.toInt(), fileLabel = label, fileDoneBytes = 0L, fileTotalBytes = 0L) }
+        mutate {
+            it.copy(
+                doneItems = next.toInt(),
+                fileLabel = if (bytes > 0L) label else "",
+                fileDoneBytes = bytes.coerceAtLeast(0L),
+                fileTotalBytes = bytes.coerceAtLeast(0L),
+            )
+        }
     }
 
     fun done(message: String = "") {

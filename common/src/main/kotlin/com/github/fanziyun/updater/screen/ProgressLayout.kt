@@ -101,7 +101,7 @@ object ProgressLayout {
 
         val fileCaption = localize(
             "screen.updater363.progress.file_progress",
-            model.fileCaption.ifBlank { localize("screen.updater363.progress.unknown", "") },
+            model.fileCaption.ifBlank { localize(model.filePlaceholderKey, "") },
         )
         canvas.drawText(canvas.fit(fileCaption, bounds.barWidth), bounds.barLeft, bounds.fileCaptionY, TEXT_DIM)
         drawBar(canvas, bounds.barLeft, bounds.fileBarY, bounds.barWidth, model.fileFraction, model, stripe = true)

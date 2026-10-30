@@ -88,6 +88,8 @@
   "screen.updater363.progress.file_progress": "진행률: %s",
   "screen.updater363.progress.total_progress": "총 진행률: %s",
   "screen.updater363.progress.unknown": "알 수 없음",
+  "screen.updater363.progress.file_done": "모든 파일 작성 완료",
+  "screen.updater363.progress.file_stopped": "중단됨",
   "text.autoconfig.updater363.title": "363Updater 설정",
   "text.autoconfig.updater363.category.basic": "기본",
   "text.autoconfig.updater363.category.advanced": "고급",

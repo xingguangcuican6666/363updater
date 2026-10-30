@@ -88,5 +88,49 @@ class UpdateProgressTrackerTest {
         val model = ProgressViewModel.of(UpdateProgressTracker.progress)
         assertEquals("screen.updater363.progress.backup", model.headlineKey)
         assertEquals("tx-id", model.headlineArg)
+        assertEquals("screen.updater363.progress.unknown", model.filePlaceholderKey)
+    }
+
+    @Test
+    fun `a completed file keeps its meter full until the next one starts`() {
+        UpdateProgressTracker.reset(totalItems = 2, totalBytes = 200L)
+        UpdateProgressTracker.listener.startFile("mods/a.jar", 100L)
+        UpdateProgressTracker.listener.fileBytes(100L)
+        UpdateProgressTracker.listener.finishFile("mods/a.jar", 100L)
+
+        val progress = UpdateProgressTracker.progress
+        assertEquals("mods/a.jar", progress.fileLabel)
+        assertEquals(1.0, progress.fileFraction, 1e-9)
+        assertEquals(1, progress.doneItems)
+
+        UpdateProgressTracker.listener.startFile("mods/b.jar", 100L)
+        assertEquals("mods/b.jar", UpdateProgressTracker.progress.fileLabel)
+        assertEquals(0.0, UpdateProgressTracker.progress.fileFraction, 1e-9)
+    }
+
+    @Test
+    fun `a finished run reads both bars full and names phase-specific placeholders`() {
+        UpdateProgressTracker.reset(totalItems = 2, totalBytes = 200L)
+        UpdateProgressTracker.phase(UpdatePhase.LOADER, "fabric-loader 0.18.6")
+        UpdateProgressTracker.done("fabric-loader 0.18.6 installed")
+
+        val model = ProgressViewModel.of(UpdateProgressTracker.progress)
+        assertTrue(model.finished)
+        assertEquals(1.0, model.fileFraction, 1e-9)
+        assertEquals(1.0, model.totalFraction, 1e-9)
+        assertEquals("screen.updater363.progress.file_done", model.filePlaceholderKey)
+        assertEquals("screen.updater363.progress.status", model.statusKey)
+        assertEquals("fabric-loader 0.18.6 installed", model.statusArg)
+    }
+
+    @Test
+    fun `a failed run reports the error through the shared error key`() {
+        UpdateProgressTracker.reset(totalItems = 2, totalBytes = 200L)
+        UpdateProgressTracker.failed("Managed file server returned HTTP 404")
+        val model = ProgressViewModel.of(UpdateProgressTracker.progress)
+        assertTrue(model.failed)
+        assertEquals("screen.updater363.error", model.statusKey)
+        assertEquals("Managed file server returned HTTP 404", model.statusArg)
+        assertEquals("screen.updater363.progress.file_stopped", model.filePlaceholderKey)
     }
 }

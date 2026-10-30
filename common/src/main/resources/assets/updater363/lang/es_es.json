@@ -88,6 +88,8 @@
   "screen.updater363.progress.file_progress": "Progreso: %s",
   "screen.updater363.progress.total_progress": "Total: %s",
   "screen.updater363.progress.unknown": "desconocido",
+  "screen.updater363.progress.file_done": "todos los archivos escritos",
+  "screen.updater363.progress.file_stopped": "detenido",
   "text.autoconfig.updater363.title": "Ajustes de 363Updater",
   "text.autoconfig.updater363.category.basic": "General",
   "text.autoconfig.updater363.category.advanced": "Avanzado",

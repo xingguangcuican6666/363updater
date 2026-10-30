@@ -88,6 +88,8 @@
   "screen.updater363.progress.file_progress": "進度：%s",
   "screen.updater363.progress.total_progress": "總進度：%s",
   "screen.updater363.progress.unknown": "未知",
+  "screen.updater363.progress.file_done": "全部檔案已寫入",
+  "screen.updater363.progress.file_stopped": "已中止",
   "text.autoconfig.updater363.title": "363Updater 設定",
   "text.autoconfig.updater363.category.basic": "基本",
   "text.autoconfig.updater363.category.advanced": "進階",

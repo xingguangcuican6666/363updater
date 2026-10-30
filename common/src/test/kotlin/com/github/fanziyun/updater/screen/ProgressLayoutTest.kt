@@ -33,6 +33,7 @@ class ProgressLayoutTest {
         headlineArg = "mods/sample.jar",
         fileCaption = fileCaption,
         fileFraction = fileFraction,
+        filePlaceholderKey = "screen.updater363.progress.unknown",
         totalCaption = totalCaption,
         totalFraction = totalFraction,
         statusKey = "screen.updater363.progress.status",

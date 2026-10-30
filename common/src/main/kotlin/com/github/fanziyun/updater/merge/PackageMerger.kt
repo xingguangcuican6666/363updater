@@ -101,6 +101,8 @@ object PackageMerger {
             requiresRestart = restartRequired,
             codeChanges = restartRequired,
             targetIndexBytes = targetPackage.indexBytes,
+            currentLoaderVersion = oldPackage.loaderVersion,
+            targetLoaderVersion = targetPackage.loaderVersion,
         )
     }
 

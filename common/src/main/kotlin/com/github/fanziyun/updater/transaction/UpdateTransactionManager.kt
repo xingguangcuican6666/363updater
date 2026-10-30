@@ -77,11 +77,13 @@ class UpdateTransactionManager(
     private val gameDir: Path = Platform.INSTANCE.gameDir,
     private val timeoutMs: Int = 30_000,
     private val selfJar: Path? = Platform.INSTANCE.selfJar,
+    private val listener: com.github.fanziyun.updater.progress.ProgressListener =
+        com.github.fanziyun.updater.progress.ProgressListener.NONE,
 ) {
     private val gson = GsonBuilder().setPrettyPrinting().create()
     private val cacheRoot = gameDir.resolve(".cache").resolve(Updater.MOD_ID)
     private val root = cacheRoot.resolve("transactions")
-    private val contentCache = ManagedFileCache(timeoutMs, cacheRoot.resolve("objects"))
+    private val contentCache = ManagedFileCache(timeoutMs, cacheRoot.resolve("objects"), listener)
 
     fun prepare(plan: UpdatePlan, config: UpdaterConfig): PreparedTransaction {
         check(!plan.hasConflicts) { "Resolve managed-file conflicts before preparing the update" }
@@ -94,8 +96,11 @@ class UpdateTransactionManager(
         preflight(plan, temporary)
         try {
             Files.createDirectories(temporary)
+            listener.phase(com.github.fanziyun.updater.progress.UpdatePhase.BACKUP, id)
             createBackup(temporary.resolve("backup"))
+            listener.phase(com.github.fanziyun.updater.progress.UpdatePhase.STAGE, id)
             createStaging(temporary.resolve("staged"), plan)
+            listener.phase(com.github.fanziyun.updater.progress.UpdatePhase.STAGE, id)
             createGeneration(temporary.resolve("generation/mods"), plan)
             LauncherMetadata.stage(gameDir, temporary, plan)
             val helper = copyHelperJar(temporary)

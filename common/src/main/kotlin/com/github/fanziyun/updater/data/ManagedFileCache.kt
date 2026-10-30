@@ -2,6 +2,7 @@ package com.github.fanziyun.updater.data
 
 import com.github.fanziyun.updater.Updater
 import com.github.fanziyun.updater.platform.Platform
+import com.github.fanziyun.updater.progress.ProgressListener
 import java.io.BufferedInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
@@ -18,6 +19,7 @@ class ManagedFileDownloadException(message: String, cause: Throwable? = null) : 
 class ManagedFileCache(
     private val timeoutMs: Int,
     private val root: Path = Platform.INSTANCE.gameDir.resolve(".cache").resolve(Updater.MOD_ID).resolve("objects"),
+    private val listener: ProgressListener = ProgressListener.NONE,
 ) {
     companion object {
         const val MAX_REDIRECTS = 5
@@ -41,7 +43,11 @@ class ManagedFileCache(
     fun materialize(file: PackageFile): Path {
         val destination = objectPath(file.hashes)
         validateDestination(destination)
-        if (Files.isRegularFile(destination, LinkOption.NOFOLLOW_LINKS) && valid(destination, file)) return destination
+        if (Files.isRegularFile(destination, LinkOption.NOFOLLOW_LINKS) && valid(destination, file)) {
+            // A cache hit still counts toward the run so the item meter stays predictable.
+            listener.finishFile(file.relativePath)
+            return destination
+        }
         validateCacheParents(destination.parent)
         Files.createDirectories(destination.parent)
         validateCacheParents(destination.parent)
@@ -49,13 +55,18 @@ class ManagedFileCache(
             require(bytes.size.toLong() == file.size) { "Embedded size mismatch for ${file.relativePath}" }
             require(file.hashes.matches(bytes)) { "Embedded hash mismatch for ${file.relativePath}" }
             writeObject(destination, bytes)
+            listener.finishFile(file.relativePath, file.size)
             return destination
         }
         require(file.urls.isNotEmpty()) { "Managed file has no download URL: ${file.relativePath}" }
+        listener.startFile(file.relativePath, file.size)
         val failures = mutableListOf<Throwable>()
         file.urls.forEach { url ->
             val result = runCatching { download(url, file, destination) }
-            if (result.isSuccess) return destination
+            if (result.isSuccess) {
+                listener.finishFile(file.relativePath, file.size)
+                return destination
+            }
             failures += result.exceptionOrNull() ?: return@forEach
         }
         val failure = ManagedFileDownloadException("Unable to download managed file ${file.relativePath}")
@@ -104,6 +115,7 @@ class ManagedFileCache(
                                 sha1.update(buffer, 0, count)
                                 sha512.update(buffer, 0, count)
                                 output.write(buffer, 0, count)
+                                listener.fileBytes(total)
                             }
                             if (total != file.size) {
                                 throw ManagedFileDownloadException("Downloaded size mismatch for ${file.relativePath}")

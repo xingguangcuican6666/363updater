@@ -8,6 +8,9 @@ import java.nio.file.Path
 class FabricPlatform : Platform {
     override val gameDir: Path get() = FabricLoader.getInstance().gameDir
     override val loaderId: String get() = "fabric"
+    override val loaderVersion: String
+        get() = FabricLoader.getInstance().getModContainer("fabricloader").orElse(null)
+            ?.metadata?.version?.friendlyString.orEmpty()
     override val protectedModPaths: Set<String>
         get() {
             val root = gameDir.toAbsolutePath().normalize()

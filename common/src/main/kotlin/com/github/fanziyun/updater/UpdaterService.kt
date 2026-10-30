@@ -148,6 +148,7 @@ object UpdaterService {
 
         if (!RuntimeEnvironment.isAndroid) {
             toggle(restart, "updateManagedMods", value.updateManagedMods, defaults.updateManagedMods) { value.updateManagedMods = it }
+            toggle(restart, "updateFabricLoader", value.updateFabricLoader, defaults.updateFabricLoader) { value.updateFabricLoader = it }
         }
         if (supportsFastRestartProfile()) {
             toggle(restart, "experimentalFastRestart", value.experimentalFastRestart, defaults.experimentalFastRestart) { value.experimentalFastRestart = it }
@@ -207,9 +208,21 @@ object UpdaterService {
             val keepPackages = config.cachePackages
             try {
                 val client = modrinthClient()
-                if (!client.cachedFileValid(resolved.current, old)) client.download(resolved.current, old)
-                if (!client.cachedFileValid(resolved.target, target)) client.download(resolved.target, target)
-                val contentCache = ManagedFileCache(timeoutMs())
+                val progress = com.github.fanziyun.updater.progress.UpdateProgressTracker
+                val listener = progress.listener
+                val packages = listOf(
+                    resolved.current to old,
+                    resolved.target to target,
+                ).distinctBy { it.second }
+                val pending = packages.filterNot { (version, path) -> client.cachedFileValid(version, path) }
+                progress.reset(
+                    totalItems = pending.size,
+                    totalBytes = pending.sumOf { (version, _) -> version.primaryFile?.size?.coerceAtLeast(0L) ?: 0L },
+                )
+                if (pending.isNotEmpty()) progress.phase(com.github.fanziyun.updater.progress.UpdatePhase.DOWNLOAD_PACKAGE)
+                pending.forEach { (version, path) -> client.download(version, path, listener) }
+                progress.phase(com.github.fanziyun.updater.progress.UpdatePhase.ANALYZE)
+                val contentCache = ManagedFileCache(timeoutMs(), listener = listener)
                 val oldSnapshot = contentCache.materializeForPreview(MrpackReader.read(old, resolved.current.number))
                 val targetSnapshot = contentCache.materializeForPreview(MrpackReader.read(target, resolved.target.number))
                 val installation = VersionTracker.readInstallation(
@@ -217,6 +230,7 @@ object UpdaterService {
                     resolved.minecraftVersion,
                     resolved.loader,
                 )
+                progress.phase(com.github.fanziyun.updater.progress.UpdatePhase.ANALYZE)
                 val result = PackageMerger.preview(
                     oldSnapshot,
                     targetSnapshot,
@@ -232,8 +246,11 @@ object UpdaterService {
                     minecraftVersion = resolved.minecraftVersion,
                     loader = resolved.loader,
                     targetVersionId = resolved.target.id,
+                    // The installed loader version is authoritative for "is an upgrade needed".
+                    currentLoaderVersion = if (resolved.loader == "fabric") Platform.INSTANCE.loaderVersion else "",
                 )
                 plan = result
+                progress.done()
                 result
             } finally {
                 if (!keepPackages) {

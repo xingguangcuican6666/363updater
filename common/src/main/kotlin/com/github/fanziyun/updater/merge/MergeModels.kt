@@ -69,6 +69,9 @@ data class UpdatePlan(
     val requiresRestart: Boolean = false,
     val codeChanges: Boolean = false,
     val targetIndexBytes: ByteArray? = null,
+    /** Loader versions declared by the current/target mrpack `dependencies`, e.g. `fabric-loader`. */
+    val currentLoaderVersion: String = "",
+    val targetLoaderVersion: String = "",
 ) {
     val changedFiles: List<FilePlan> get() = files.filter(FilePlan::changed)
     val displayedFiles: List<FilePlan> get() = files.filter { it.changed() || it.warning != null }
@@ -82,4 +85,10 @@ data class UpdatePlan(
     val configFiles: List<FilePlan> get() = files.filterNot { it.managedMod }
     val protectedFiles: List<FilePlan> get() = files.filter { it.protectedFile }
     val hasConflicts: Boolean get() = conflicts.isNotEmpty() || files.any(FilePlan::hasConflict)
+
+    /** True when the target package declares a newer loader than the installed one. */
+    val loaderUpdateAvailable: Boolean
+        get() = targetLoaderVersion.isNotBlank() &&
+            currentLoaderVersion.isNotBlank() &&
+            com.github.fanziyun.updater.util.SemVer.compare(targetLoaderVersion, currentLoaderVersion) > 0
 }

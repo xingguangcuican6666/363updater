@@ -5,6 +5,8 @@ import com.github.fanziyun.updater.config.UpdaterConfig
 import com.github.fanziyun.updater.merge.FileAction
 import com.github.fanziyun.updater.merge.UpdatePlan
 import com.github.fanziyun.updater.platform.Platform
+import com.github.fanziyun.updater.progress.UpdatePhase
+import com.github.fanziyun.updater.progress.UpdateProgressTracker
 import com.github.fanziyun.updater.reload.HotReloadService
 import com.github.fanziyun.updater.reload.ReloadReport
 import com.github.fanziyun.updater.util.AtomicFiles
@@ -24,11 +26,21 @@ data class ApplyResult(
 
 object UpdateExecutor {
     fun apply(plan: UpdatePlan, config: UpdaterConfig): ApplyResult {
+        UpdateProgressTracker.reset(
+            totalItems = plan.changedFiles.size,
+            totalBytes = plan.downloadBytes,
+        )
         validateCurrentFiles(plan)
         check(!plan.hasConflicts) { "Resolve update conflicts before applying the update" }
         if (plan.requiresRestart) {
-            val transaction = UpdateTransactionManager(timeoutMs = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000)
-                .prepare(plan, config)
+            UpdateProgressTracker.phase(UpdatePhase.PREPARE, plan.targetVersion)
+            val timeoutMs = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000
+            val transaction = UpdateTransactionManager(
+                timeoutMs = timeoutMs,
+                listener = UpdateProgressTracker.listener,
+            ).prepare(plan, config)
+            updateFabricLoader(plan, config, timeoutMs)
+            UpdateProgressTracker.done(transaction.id)
             return ApplyResult(
                 backup = null,
                 reloaded = false,
@@ -37,15 +49,19 @@ object UpdateExecutor {
                 requiresRestart = true,
             )
         }
+        UpdateProgressTracker.phase(UpdatePhase.BACKUP)
         val backup = BackupManager.create(config.backupCount)
         try {
+            UpdateProgressTracker.phase(UpdatePhase.WRITE)
             plan.changedFiles.forEach { file ->
                 val target = PathSafety.resolveGamePath(file.relativePath)
+                UpdateProgressTracker.file(file.relativePath, file.size)
                 when (file.action) {
                     FileAction.WRITE -> AtomicFiles.write(target, file.bytes ?: error("Missing bytes for ${file.relativePath}"))
                     FileAction.DELETE -> Files.deleteIfExists(target)
                     FileAction.UNCHANGED -> Unit
                 }
+                UpdateProgressTracker.completeItem(file.relativePath, file.size)
             }
             VersionTracker.write(
                 config = config,
@@ -61,6 +77,7 @@ object UpdateExecutor {
                 managedFiles = plan.managedFiles,
             )
         } catch (exception: Exception) {
+            UpdateProgressTracker.failed(exception.message ?: exception.javaClass.simpleName)
             val rollbackFailure = runCatching { BackupManager.restore(backup) }.exceptionOrNull()
             if (rollbackFailure != null) {
                 Updater.LOGGER.error("Updater rollback failed", rollbackFailure)
@@ -70,9 +87,52 @@ object UpdateExecutor {
             throw IllegalStateException("Updater failed and restored the previous configuration", exception)
         }
 
+        UpdateProgressTracker.phase(UpdatePhase.RELOAD)
         val reload = runCatching { HotReloadService.reload(config.experimentalHotReload) }
             .getOrElse { ReloadReport(true, listOf("Hot reload: ${it.message ?: it.javaClass.simpleName}")) }
+        // A loader-only bump has no jar changes, so it lands here; the new profile applies at next launch.
+        updateFabricLoader(plan, config, config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000)
+        UpdateProgressTracker.done()
         return ApplyResult(backup, reload.attempted && reload.failures.isEmpty(), reload.failures)
+    }
+
+    /**
+     * Overwrite-installs the Fabric loader version declared by the target mrpack.
+     *
+     * The transaction or configuration update has already been staged at this point, so a loader
+     * failure is recorded and swallowed rather than aborting the run: the modpack update stays
+     * usable on the current loader and the player sees why the loader step did not complete.
+     */
+    internal fun updateFabricLoader(
+        plan: UpdatePlan,
+        config: UpdaterConfig,
+        timeoutMs: Int,
+        gameDir: Path = Platform.INSTANCE.gameDir,
+        loaderId: String = Platform.INSTANCE.loaderId,
+        currentLoaderVersion: String = Platform.INSTANCE.loaderVersion,
+    ) {
+        if (!config.updateFabricLoader || loaderId != "fabric") return
+        val target = plan.targetLoaderVersion
+        if (!FabricLoaderUpdater.shouldUpdate(currentLoaderVersion, target)) return
+        val minecraftVersion = plan.minecraftVersion.ifBlank {
+            config.minecraftVersion.trim().ifBlank { Platform.INSTANCE.minecraftVersion }
+        }
+        try {
+            val installed = FabricLoaderUpdater.update(
+                gameDir = gameDir,
+                minecraftVersion = minecraftVersion,
+                currentLoaderVersion = currentLoaderVersion,
+                targetLoaderVersion = target,
+                timeoutMs = timeoutMs,
+                listener = UpdateProgressTracker.listener,
+            )
+            if (installed != null) {
+                Updater.LOGGER.info("Fabric loader {} is now installed over {}", installed, currentLoaderVersion)
+            }
+        } catch (exception: Exception) {
+            Updater.LOGGER.error("Fabric loader update to {} failed", target, exception)
+            UpdateProgressTracker.message("Fabric loader update failed: ${exception.message ?: exception.javaClass.simpleName}")
+        }
     }
 
     fun rollbackLatest() {

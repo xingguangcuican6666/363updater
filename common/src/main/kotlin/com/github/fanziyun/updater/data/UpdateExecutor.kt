@@ -25,11 +25,12 @@ data class ApplyResult(
 )
 
 object UpdateExecutor {
+    /**
+     * Applies [plan]. The caller ([com.github.fanziyun.updater.UpdaterService.apply]) has already
+     * reset the progress tracker with this plan's totals so the progress page starts from zero; this
+     * method only publishes phases and per-file counters.
+     */
     fun apply(plan: UpdatePlan, config: UpdaterConfig): ApplyResult {
-        UpdateProgressTracker.reset(
-            totalItems = plan.changedFiles.size,
-            totalBytes = plan.downloadBytes,
-        )
         validateCurrentFiles(plan)
         check(!plan.hasConflicts) { "Resolve update conflicts before applying the update" }
         if (plan.requiresRestart) {

@@ -261,8 +261,14 @@ object UpdaterService {
         }, executor)
     }
 
-    fun apply(updatePlan: UpdatePlan = plan ?: error("Open the difference view before updating")): CompletableFuture<ApplyResult> =
-        CompletableFuture.supplyAsync({
+    fun apply(updatePlan: UpdatePlan = plan ?: error("Open the difference view before updating")): CompletableFuture<ApplyResult> {
+        // Reset on the caller thread, before the progress page is constructed, so the page never
+        // renders the preview run's DONE snapshot for a frame while the worker starts up.
+        com.github.fanziyun.updater.progress.UpdateProgressTracker.reset(
+            totalItems = updatePlan.changedFiles.size,
+            totalBytes = updatePlan.downloadBytes,
+        )
+        return CompletableFuture.supplyAsync({
             check(!RuntimeEnvironment.isAndroid || updatePlan.modFiles.isEmpty()) {
                 "Managed mod updates are disabled on Android; reopen the difference view"
             }
@@ -276,6 +282,7 @@ object UpdaterService {
             }
             result
         }, executor)
+    }
 
     fun activeTransaction(): PreparedTransaction? = activeTransactionId?.let { id ->
         runCatching { transactionManager().load(id) }.getOrNull()

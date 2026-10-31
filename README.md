@@ -15,7 +15,8 @@
 - 更新前备份整个 `config/` 和 `options.txt`，默认保留最近 3 次。
 - 更新后可尝试资源重载和注册的配置重载器；失败项会提示重启。
 - 点击更新后先进入进度页：显示正在更新的文件、该文件的 `已下载 / 总大小` 与进度条，以及整体的 `已完成 / 总数` 与第二条进度条。下载、备份、写入、暂存和加载器安装各阶段共用同一条上报通道；写入过程中不可退出，失败会留在页面并显示原因。
-- 目标 mrpack 声明了更高的 `fabric-loader` 时，会按 Fabric meta 下载该 loader 需要的全部库并改写启动器版本档案（`updateFabricLoader`，默认开启，Android 上隐藏）。HMCL、PCL、Prism 这类实例把 loader 版本固定在 `<实例>/<id>.json` 的 `libraries` 里，所以跑 Fabric installer 对它们无效——installer 只会写一个没人读的 `versions/fabric-loader-*` 档案。改写档案前会先把库下到共享 `libraries/`，并留一份 `.preloader.bak`。loader 更新失败会中止本次更新，因为目标包的模组可能需要新 loader，只提交模组会让实例起不来。替换 loader 后必须由启动器重新启动实例，进程内重启和自动重启都会被拒绝并说明原因。
+- 目标 mrpack 声明了更高的 `fabric-loader` 时，会按 Fabric meta 下载该 loader 需要的全部库并改写启动器版本档案（`updateFabricLoader`，默认开启，Android 上隐藏）。HMCL、PCL、Prism 这类实例把 loader 版本固定在 `<实例>/<id>.json` 里，而且 HMCL 的 classpath 是从 `patches[]` 链拼出来的（顶层 `libraries` 只是扁平快照），所以两处都要改，只改顶层会让启动器继续用旧 loader；跑 Fabric installer 更没用，它只会写一个没人读的 `versions/fabric-loader-*` 档案。改写档案前会先把库下到共享 `libraries/` 并校验 SHA-1，同时留一份 `.preloader.bak`。loader 更新失败会中止本次更新，因为目标包的模组可能需要新 loader，只提交模组会让实例起不来。
+- 进程内重启仍然可用：重启是照抄当前 JVM 命令行重新拉一个进程，而命令行用绝对路径钉死了 loader jar，所以 `LoaderRelaunchStrategy` 会把 classpath 里那些 loader 库路径改写成新档案声明的 jar。改写不成立（档案声明的 jar 不在磁盘上）时才退回「请用启动器重启」，并在界面上说明原因。
 - 内置简体中文、繁体中文、英语、日语、韩语、德语、法语、西班牙语、俄语和巴西葡萄牙语。
 - 受管模组更新默认关闭；开启后会保留未受整合包管理的用户模组，并在受管文件被本地修改时中止而不是覆盖。
 - 实验性快速重启默认关闭，只能从主菜单启动；在受支持的 Linux/Windows 构建中从暂存模组代际启动全新 JVM，稳定后再交接窗口和提交正式 `mods/`。

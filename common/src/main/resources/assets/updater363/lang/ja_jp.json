@@ -44,6 +44,8 @@
   "screen.updater363.restart.reason.fast_command_unavailable": "現在の起動コマンドを安全に再現できません。",
   "screen.updater363.restart.reason.fast_restart_disabled": "実験的な高速再起動は無効です。",
   "screen.updater363.restart.loader_required": "Fabricローダー %s をインストールしました。ゲームを閉じてランチャーから起動し直してください。",
+  "screen.updater363.restart.loader_installed": "Fabricローダー %s をインストールしました。ゲームを再起動すると適用されます。",
+  "screen.updater363.restart.loader_relaunch": "再起動するとFabricローダー %s でゲームが起動します。",
   "screen.updater363.restart.loader_reason": "プロセス内再起動は古いローダーで新しいMODを起動します。更新後のプロファイルを読むのはランチャーだけです。",
   "screen.updater363.restart.reason.loader_restart": "新しいFabricローダーを読み込むには、ランチャーがこのインスタンスを再起動する必要があります。",
   "screen.updater363.restart.reason.inspect_failed": "再起動の対応状況を確認できません。",

@@ -90,6 +90,11 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
                     "screen.updater363.restart.loader_required",
                     caps.loaderInstalledVersion,
                 ).string
+            caps?.loaderInstalledVersion?.isNotBlank() == true ->
+                Component.translatable(
+                    "screen.updater363.restart.loader_installed",
+                    caps.loaderInstalledVersion,
+                ).string
             else -> Component.translatable("screen.updater363.restart.choose").string
         }
         graphics.text(font, fit(message, width - 50), 25, 65, 0xFFCCCCCC.toInt())
@@ -97,6 +102,13 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
         if (caps?.loaderRestartRequired == true && current == null) {
             val reason = Component.translatable("screen.updater363.restart.loader_reason").string
             graphics.text(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
+        } else if (caps?.loaderInstalledVersion?.isNotBlank() == true && current == null) {
+            // The relaunch rewrites the loader jars on the classpath, so say what will actually start.
+            val note = Component.translatable(
+                "screen.updater363.restart.loader_relaunch",
+                caps.loaderInstalledVersion,
+            ).string
+            graphics.text(font, fit(note, width - 50), 25, 110, 0xFFAAAAAA.toInt())
         } else if (caps?.automaticAvailable == false && current == null) {
             val reason = RestartReasonText.automaticCapability(caps?.automaticReason.orEmpty())
             graphics.text(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())

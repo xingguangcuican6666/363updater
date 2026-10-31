@@ -44,6 +44,8 @@
   "screen.updater363.restart.reason.fast_command_unavailable": "Der aktuelle Startbefehl kann nicht sicher reproduziert werden.",
   "screen.updater363.restart.reason.fast_restart_disabled": "Der experimentelle Schnellneustart ist deaktiviert.",
   "screen.updater363.restart.loader_required": "Fabric-Loader %s wurde installiert. Schließe das Spiel und starte es über den Launcher neu.",
+  "screen.updater363.restart.loader_installed": "Fabric-Loader %s installiert. Starte das Spiel neu, um ihn zu verwenden.",
+  "screen.updater363.restart.loader_relaunch": "Nach dem Neustart startet das Spiel mit Fabric-Loader %s.",
   "screen.updater363.restart.loader_reason": "Ein Neustart im Prozess würde die neuen Mods mit dem alten Loader starten. Nur der Launcher liest das aktualisierte Profil.",
   "screen.updater363.restart.reason.loader_restart": "Der Launcher muss diese Instanz neu starten, um den neuen Fabric-Loader zu laden.",
   "screen.updater363.restart.reason.inspect_failed": "Die Neustartunterstützung konnte nicht geprüft werden.",

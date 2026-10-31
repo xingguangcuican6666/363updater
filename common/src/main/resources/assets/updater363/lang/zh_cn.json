@@ -44,6 +44,8 @@
   "screen.updater363.restart.reason.fast_command_unavailable": "无法安全复现当前启动命令。",
   "screen.updater363.restart.reason.fast_restart_disabled": "实验性快速重启已关闭。",
   "screen.updater363.restart.loader_required": "已安装 Fabric 加载器 %s。请关闭游戏并从启动器重新启动。",
+  "screen.updater363.restart.loader_installed": "已安装 Fabric 加载器 %s。重启游戏后生效。",
+  "screen.updater363.restart.loader_relaunch": "重启后将使用 Fabric 加载器 %s 启动游戏。",
   "screen.updater363.restart.loader_reason": "进程内重启会用旧加载器启动新模组。只有启动器才会读取更新后的配置。",
   "screen.updater363.restart.reason.loader_restart": "必须由启动器重新启动此实例，才能加载新的 Fabric 加载器。",
   "screen.updater363.restart.reason.inspect_failed": "无法检查重启支持情况。",

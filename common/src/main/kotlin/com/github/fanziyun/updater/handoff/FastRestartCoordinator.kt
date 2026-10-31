@@ -28,8 +28,10 @@ object FastRestartCoordinator {
             current = manager.transition(current, TransactionStage.CHILD_STARTING)
             server = HandoffServer()
             val helperJar = current.helperJar ?: error("Missing copied updater helper JAR")
+            // LoaderRelaunchStrategy runs first so a loader this transaction installed is on the
+            // classpath the staged-mods properties then get added to.
             val command = StagedModsLaunchStrategy.prepare(
-                CurrentJvmCommand.capture(),
+                LoaderRelaunchStrategy.prepare(CurrentJvmCommand.capture(), current),
                 Platform.INSTANCE.loaderId,
                 current.generationMods,
                 helperJar,

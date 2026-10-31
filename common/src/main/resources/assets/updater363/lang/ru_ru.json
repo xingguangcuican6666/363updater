@@ -44,6 +44,8 @@
   "screen.updater363.restart.reason.fast_command_unavailable": "Текущую команду запуска невозможно безопасно воспроизвести.",
   "screen.updater363.restart.reason.fast_restart_disabled": "Экспериментальный быстрый перезапуск отключён.",
   "screen.updater363.restart.loader_required": "Установлен загрузчик Fabric %s. Закройте игру и запустите её снова из лаунчера.",
+  "screen.updater363.restart.loader_installed": "Установлен загрузчик Fabric %s. Перезапустите игру, чтобы он вступил в силу.",
+  "screen.updater363.restart.loader_relaunch": "После перезапуска игра запустится на загрузчике Fabric %s.",
   "screen.updater363.restart.loader_reason": "Перезапуск внутри процесса запустил бы новые моды на старом загрузчике. Обновлённый профиль читает только лаунчер.",
   "screen.updater363.restart.reason.loader_restart": "Чтобы загрузить новый загрузчик Fabric, лаунчер должен перезапустить этот экземпляр.",
   "screen.updater363.restart.reason.inspect_failed": "Не удалось проверить поддержку перезапуска.",

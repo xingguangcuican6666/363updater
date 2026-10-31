@@ -44,6 +44,8 @@
   "screen.updater363.restart.reason.fast_command_unavailable": "The current launch command cannot be reproduced safely.",
   "screen.updater363.restart.reason.fast_restart_disabled": "Experimental fast restart is disabled.",
   "screen.updater363.restart.loader_required": "Fabric loader %s was installed. Close the game and start it again from your launcher.",
+  "screen.updater363.restart.loader_installed": "Fabric loader %s installed. Restart the game to run it.",
+  "screen.updater363.restart.loader_relaunch": "Restarting will start the game on Fabric loader %s.",
   "screen.updater363.restart.loader_reason": "An in-process restart would boot the new mods on the old loader. Only the launcher reads the updated profile.",
   "screen.updater363.restart.reason.loader_restart": "The launcher must restart this instance to load the new Fabric loader.",
   "screen.updater363.restart.reason.inspect_failed": "Unable to inspect restart support.",

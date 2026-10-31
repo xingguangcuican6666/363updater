@@ -54,7 +54,8 @@ class UpdateDiffScreen(
                     plan = result
                     detailLines = buildLines(result)
                     scrollbar.update(detailLines.size * 12, height - 90)
-                    updateButton?.active = !result.hasConflicts && result.changedFiles.isNotEmpty()
+                    updateButton?.active = !result.hasConflicts &&
+                        (result.changedFiles.isNotEmpty() || result.loaderUpdateAvailable)
                     if (applyAfterLoad && !result.codeChanges && !result.hasConflicts) applyUpdate()
                 }
             }
@@ -76,7 +77,7 @@ class UpdateDiffScreen(
             UpdateProgressScreen(destination, UpdaterService.apply(currentPlan)) { result ->
                 ClientScreens.set(
                     if (result.requiresRestart) RestartChoiceScreen(destination)
-                    else UpdateResultScreen(destination, result.reloadFailures),
+                    else UpdateResultScreen(destination, result.reloadFailures, loaderUpdate = result.loaderUpdate),
                 )
             },
         )

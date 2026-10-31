@@ -3,13 +3,12 @@ package com.github.fanziyun.updater.data
 import com.github.fanziyun.updater.Updater
 import com.github.fanziyun.updater.progress.ProgressListener
 import com.github.fanziyun.updater.progress.UpdatePhase
-import com.github.fanziyun.updater.util.AtomicFiles
 import com.github.fanziyun.updater.util.SemVer
+import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
-import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Locale
@@ -19,26 +18,25 @@ class FabricLoaderUpdateException(message: String, cause: Throwable? = null) : j
 /**
  * Installs the Fabric loader version declared by the target mrpack over the current installation.
  *
- * The flow mirrors what a launcher does: resolve the loader and a stable installer from the Fabric
- * meta API, download the installer JAR into the updater cache (reported through the shared progress
- * listener), then run it in `client -dir <gameDir>` mode so the loader profile and its libraries land
- * next to the game directory and the next launch overwrites the current loader version.
+ * Launchers such as HMCL, PCL and Prism keep the loader version pinned in the instance profile
+ * (`<instance>/<id>.json`) and resolve libraries from a shared `libraries/` root. Running the Fabric
+ * installer against the game directory does not change those, so it has no effect on such an
+ * instance: it writes a `versions/fabric-loader-*` profile nothing reads, and the next launch still
+ * uses the pinned loader. The change that takes effect everywhere is the loader library set inside
+ * the profile the launcher actually loads, plus the jars behind it.
  *
- * Network and process steps are thin; the decision logic and command shape live in pure functions so
- * they stay unit-testable.
+ * So the update resolves the loader metadata from the Fabric meta API, downloads every library the
+ * target loader needs into the resolved `libraries/` root, and rewrites the profile in place. The
+ * instance keeps its name, JVM arguments and other launcher settings.
  */
 object FabricLoaderUpdater {
     const val META_ROOT = "https://meta.fabricmc.net/v2"
-    const val MAX_INSTALLER_BYTES = 64L * 1024L * 1024L
+    const val MAX_LIBRARY_BYTES = 64L * 1024L * 1024L
     private const val MAX_METADATA_BYTES = 8L * 1024L * 1024L
+    private const val LOADER_ARTIFACT = "net.fabricmc:fabric-loader"
 
     fun loaderMetaUrl(minecraftVersion: String, loaderVersion: String): String =
         "$META_ROOT/versions/loader/${encode(minecraftVersion)}/${encode(loaderVersion)}"
-
-    fun installerListUrl(): String = "$META_ROOT/versions/installer"
-
-    fun installerJarUrl(installerVersion: String): String =
-        "$META_ROOT/versions/installer/${encode(installerVersion)}/installer/jar"
 
     /** True when [target] is a non-blank strict upgrade over [current] (blank current always upgrades). */
     fun shouldUpdate(current: String, target: String): Boolean {
@@ -47,34 +45,85 @@ object FabricLoaderUpdater {
         return SemVer.compare(target, current) > 0
     }
 
-    /** Pick the newest stable installer version from the meta `versions/installer` payload. */
-    fun selectInstallerVersion(payload: String): String {
-        val array = JsonParser.parseString(payload).asJsonArray
-        val stable = array.map { it.asJsonObject }
-            .filter { it.get("stable")?.asBoolean == true }
-            .map { it.get("version").asString }
-            .filter(String::isNotBlank)
-        return (stable.maxWithOrNull(Comparator { a, b -> SemVer.compare(a, b) })
-            ?: throw FabricLoaderUpdateException("Fabric meta returned no stable installer"))
-    }
-
-    fun installCommand(java: Path, installerJar: Path, gameDir: Path, minecraftVersion: String, loaderVersion: String): List<String> =
-        listOf(
-            java.toAbsolutePath().normalize().toString(),
-            "-jar",
-            installerJar.toAbsolutePath().normalize().toString(),
-            "client",
-            "-dir",
-            gameDir.toAbsolutePath().normalize().toString(),
-            "-mcversion",
-            minecraftVersion,
-            "-loader",
-            loaderVersion,
-        )
+    /** The loader version the profile currently pins, or null when the profile has no loader. */
+    fun profileLoaderVersion(profile: JsonObject): String? =
+        profile.getAsJsonArray("libraries")?.mapNotNull { element ->
+            element.takeIf { it.isJsonObject }?.asJsonObject?.get("name")?.takeIf { it.isJsonPrimitive }?.asString
+        }?.firstOrNull { it.startsWith("$LOADER_ARTIFACT:") }
+            ?.substringAfterLast(':')?.takeIf(String::isNotBlank)
 
     /**
-     * Downloads and installs [targetLoaderVersion]. Returns the installed version, or `null` when no
-     * update is needed. Reports every step through [listener] under [UpdatePhase.LOADER].
+     * The libraries a target loader needs, in classpath order.
+     *
+     * `loader.maven` and `intermediary.maven` carry the loader itself and the intermediary jar; the
+     * `common` group from `launcherMeta.libraries` carries asm and sponge-mixin, whose versions the
+     * loader depends on. `client` and `development` groups are empty for release loaders and are only
+     * included when the launcher meta actually populates them.
+     */
+    fun librariesFor(payload: String): List<FabricProfilePatcher.Library> {
+        val root = JsonParser.parseString(payload).asJsonObject
+        val loader = root.getAsJsonObject("loader")
+            ?: throw FabricLoaderUpdateException("Fabric meta has no loader section")
+        val loaderVersion = loader.get("version")?.asString
+            ?: throw FabricLoaderUpdateException("Fabric meta has no loader version")
+        val intermediary = root.getAsJsonObject("intermediary")
+            ?.get("maven")?.asString
+        val launcherMeta = root.getAsJsonObject("launcherMeta")
+            ?: throw FabricLoaderUpdateException("Fabric meta has no launcherMeta section")
+
+        val libraries = linkedMapOf<String, FabricProfilePatcher.Library>()
+        fun add(maven: String, url: String?, sha1: String?) {
+            val library = FabricProfilePatcher.Library(maven.trim(), url?.trim(), sha1?.lowercase())
+            libraries[library.artifact] = library
+        }
+
+        add(loader.get("maven")?.asString ?: "$LOADER_ARTIFACT:$loaderVersion", null, null)
+        intermediary?.let { add(it, null, null) }
+        launcherMeta.getAsJsonObject("libraries")?.entrySet()?.forEach { (group, element) ->
+            if (group == "development" || group == "server") return@forEach
+            element.takeIf { it.isJsonArray }?.asJsonArray?.forEach { entry ->
+                val objectEntry = entry.takeIf { it.isJsonObject }?.asJsonObject ?: return@forEach
+                val name = objectEntry.get("name")?.asString ?: return@forEach
+                add(name, objectEntry.get("url")?.asString, objectEntry.get("sha1")?.asString)
+            }
+        }
+        return libraries.values.toList()
+    }
+
+    /** The main class a target loader uses, or null when the meta does not declare one. */
+    fun mainClassFor(payload: String): String? =
+        JsonParser.parseString(payload).asJsonObject
+            .getAsJsonObject("launcherMeta")
+            ?.getAsJsonObject("mainClass")
+            ?.get("client")?.takeIf { it.isJsonPrimitive }?.asString
+
+    /**
+     * Reads the `--version` value from a launcher command line.
+     *
+     * An isolated instance stores its profile beside the game directory, so the version id is what
+     * names it; launchers pass `--version <id>` to the game, which makes the command line the most
+     * reliable source.
+     */
+    fun versionIdFromArguments(arguments: List<String>): String? {
+        var index = 0
+        while (index < arguments.size) {
+            val argument = arguments[index]
+            if (argument == "--version" || argument == "--gameVersion") {
+                return arguments.getOrNull(index + 1)?.takeIf(String::isNotBlank)
+            }
+            if (argument.startsWith("--version=")) return argument.substringAfter('=').takeIf(String::isNotBlank)
+            index++
+        }
+        return null
+    }
+
+    /**
+     * Downloads the target loader's libraries and points the instance profile at them.
+     *
+     * Returns the installed version, or `null` when no update is needed. Every step is reported
+     * through [listener] under [UpdatePhase.LOADER]. Throws when the profile cannot be located or a
+     * library cannot be fetched, so the caller can surface the reason instead of silently launching
+     * the old loader again.
      */
     fun update(
         gameDir: Path,
@@ -83,75 +132,96 @@ object FabricLoaderUpdater {
         targetLoaderVersion: String,
         timeoutMs: Int,
         listener: ProgressListener = ProgressListener.NONE,
-        javaHome: Path = Path.of(System.getProperty("java.home")),
+        versionId: String? = null,
     ): String? {
         if (!shouldUpdate(currentLoaderVersion, targetLoaderVersion)) return null
-        listener.phase(UpdatePhase.LOADER, "fabric-loader $currentLoaderVersion -> $targetLoaderVersion")
+        listener.phase(
+            UpdatePhase.LOADER,
+            "fabric-loader $currentLoaderVersion -> $targetLoaderVersion",
+        )
 
-        val loaderMeta = request(loaderMetaUrl(minecraftVersion, targetLoaderVersion), timeoutMs)
+        val payload = request(loaderMetaUrl(minecraftVersion, targetLoaderVersion), timeoutMs)
             ?: throw FabricLoaderUpdateException(
                 "Fabric meta has no loader $targetLoaderVersion for Minecraft $minecraftVersion",
             )
-        JsonParser.parseString(loaderMeta).asJsonObject.get("version")?.asString
-            ?.takeIf { it.equals(targetLoaderVersion, ignoreCase = true) }
-            ?: throw FabricLoaderUpdateException("Fabric meta returned an unexpected loader version")
-
-        val installerPayload = request(installerListUrl(), timeoutMs)
-            ?: throw FabricLoaderUpdateException("Fabric meta installer list is unavailable")
-        val installerVersion = selectInstallerVersion(installerPayload)
-        val cacheDir = gameDir.resolve(".cache").resolve(Updater.MOD_ID).resolve("loader")
-        Files.createDirectories(cacheDir)
-        val installerJar = cacheDir.resolve("fabric-installer-$installerVersion.jar")
-
-        listener.startFile(installerJar.fileName.toString(), -1L)
-        download(installerJarUrl(installerVersion), installerJar, timeoutMs) { done -> listener.fileBytes(done) }
-        listener.finishFile(installerJar.fileName.toString(), runCatching { Files.size(installerJar) }.getOrDefault(0L))
-
-        val java = javaHome.resolve("bin").resolve(if (isWindows()) "java.exe" else "java")
-        require(Files.isRegularFile(java, LinkOption.NOFOLLOW_LINKS)) { "Java executable is unavailable: $java" }
-        val command = installCommand(java, installerJar, gameDir, minecraftVersion, targetLoaderVersion)
-        Updater.LOGGER.info("Installing Fabric loader: {}", command.joinToString(" "))
-        listener.message("fabric-installer $installerVersion")
-        val process = ProcessBuilder(command)
-            .directory(gameDir.toFile())
-            .redirectErrorStream(true)
-            .start()
-        val output = process.inputStream.use { input ->
-            input.readNBytes(1024 * 1024).toString(Charsets.UTF_8)
-        }
-        val exit = process.waitFor()
-        if (exit != 0) {
+        val declared = JsonParser.parseString(payload).asJsonObject
+            .getAsJsonObject("loader")?.get("version")?.asString
+        if (declared == null || !declared.equals(targetLoaderVersion, ignoreCase = true)) {
             throw FabricLoaderUpdateException(
-                "Fabric installer exited with $exit: ${output.lineSequence().lastOrNull { it.isNotBlank() } ?: ""}",
+                "Fabric meta returned loader ${declared ?: "?"} instead of $targetLoaderVersion",
             )
         }
-        val profileDir = gameDir.resolve("versions").resolve("fabric-loader-$minecraftVersion-$targetLoaderVersion")
-        if (!Files.isDirectory(profileDir, LinkOption.NOFOLLOW_LINKS)) {
-            Updater.LOGGER.warn("Fabric loader profile directory was not created: {}", profileDir)
+
+        val libraries = librariesFor(payload)
+        val loaderLibrary = libraries.firstOrNull { it.artifact == LOADER_ARTIFACT }
+            ?: throw FabricLoaderUpdateException("Fabric meta declared no $LOADER_ARTIFACT library")
+        val librariesRoot = FabricProfilePatcher.resolveLibrariesRoot(gameDir)
+
+        // Download first: a profile that points at missing jars is worse than the current one.
+        val pending = libraries.filter { library ->
+            val jar = librariesRoot.resolve(library.relativePath)
+            !FabricProfilePatcher.libraryPresent(jar, library)
         }
-        Updater.LOGGER.info("Installed Fabric loader {} over {}", targetLoaderVersion, currentLoaderVersion)
+        if (pending.isNotEmpty()) {
+            listener.message("downloading ${pending.size} loader librar${if (pending.size == 1) "y" else "ies"}")
+            pending.forEach { library -> downloadLibrary(librariesRoot, library, timeoutMs, listener) }
+        }
+
+        val profilePath = FabricProfilePatcher.resolveProfile(gameDir, versionId)
+            ?: throw FabricLoaderUpdateException(
+                "No launcher profile pinning $LOADER_ARTIFACT was found under $gameDir",
+            )
+        val profile = JsonParser.parseString(
+            Files.readString(profilePath, Charsets.UTF_8),
+        ).asJsonObject
+        val patched = FabricProfilePatcher.patchProfile(profile, libraries, mainClassFor(payload))
+        FabricProfilePatcher.writeProfile(profilePath, patched)
+
+        val applied = profileLoaderVersion(patched)
+        if (applied != targetLoaderVersion) {
+            throw FabricLoaderUpdateException(
+                "Profile ${profilePath.fileName} still resolves fabric-loader ${applied ?: "?"}",
+            )
+        }
+        Updater.LOGGER.info(
+            "Patched {} to fabric-loader {} ({} libraries downloaded) over {}",
+            profilePath,
+            targetLoaderVersion,
+            pending.size,
+            currentLoaderVersion,
+        )
         return targetLoaderVersion
     }
 
-    private fun download(url: String, destination: Path, timeoutMs: Int, onBytes: (Long) -> Unit) {
-        val temporary = Files.createTempFile(destination.parent, ".${destination.fileName}.", ".download")
+    private fun downloadLibrary(
+        librariesRoot: Path,
+        library: FabricProfilePatcher.Library,
+        timeoutMs: Int,
+        listener: ProgressListener,
+    ) {
+        val url = library.downloadUrl() ?: libraryUrl(library)
+        val destination = librariesRoot.resolve(library.relativePath)
+        val label = destination.fileName.toString()
+        listener.startFile(label, -1L)
+        Files.createDirectories(destination.parent)
+        val temporary = Files.createTempFile(destination.parent, ".$label.", ".download")
         try {
             val connection = open(url, timeoutMs)
+            var total = 0L
             try {
                 connection.inputStream.use { raw ->
                     java.io.BufferedInputStream(raw).use { input ->
                         Files.newOutputStream(temporary).use { output ->
                             val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            var total = 0L
                             while (true) {
                                 val count = input.read(buffer)
                                 if (count < 0) break
                                 total += count
-                                if (total > MAX_INSTALLER_BYTES) {
-                                    throw FabricLoaderUpdateException("Fabric installer is too large")
+                                if (total > MAX_LIBRARY_BYTES) {
+                                    throw FabricLoaderUpdateException("Loader library $label is too large")
                                 }
                                 output.write(buffer, 0, count)
-                                onBytes(total)
+                                listener.fileBytes(total)
                             }
                         }
                     }
@@ -164,12 +234,20 @@ object FabricLoaderUpdater {
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)
             }
+            require(FabricProfilePatcher.libraryPresent(destination, library)) {
+                "Downloaded $label does not match the SHA-1 from Fabric meta"
+            }
+            listener.finishFile(label, total)
         } catch (exception: Exception) {
             runCatching { Files.deleteIfExists(temporary) }
             if (exception is FabricLoaderUpdateException) throw exception
-            throw FabricLoaderUpdateException("Unable to download the Fabric installer", exception)
+            throw FabricLoaderUpdateException("Unable to download $label from $url", exception)
         }
     }
+
+    /** Fallback URL for coordinates the meta did not carry a mirror for. */
+    private fun libraryUrl(library: FabricProfilePatcher.Library): String =
+        "https://maven.fabricmc.net/${library.relativePath}"
 
     private fun request(url: String, timeoutMs: Int): String? {
         val connection = open(url, timeoutMs)
@@ -210,7 +288,4 @@ object FabricLoaderUpdater {
 
     private fun encode(value: String): String =
         java.net.URLEncoder.encode(value.trim(), Charsets.UTF_8).replace("+", "%20")
-
-    private fun isWindows(): Boolean =
-        System.getProperty("os.name", "").lowercase(Locale.ROOT).contains("win")
 }

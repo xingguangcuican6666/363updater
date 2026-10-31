@@ -2,6 +2,7 @@ package com.github.fanziyun.updater.data
 
 import com.github.fanziyun.updater.Updater
 import com.github.fanziyun.updater.config.UpdaterConfig
+import com.github.fanziyun.updater.handoff.CurrentJvmCommand
 import com.github.fanziyun.updater.merge.FileAction
 import com.github.fanziyun.updater.merge.UpdatePlan
 import com.github.fanziyun.updater.platform.Platform
@@ -22,7 +23,12 @@ data class ApplyResult(
     val reloadFailures: List<String>,
     val transactionId: String? = null,
     val requiresRestart: Boolean = false,
+    /** Set when the loader was replaced; the player must restart through the launcher. */
+    val loaderUpdate: LoaderUpdate? = null,
 )
+
+/** A loader version the updater installed over the running one. */
+data class LoaderUpdate(val from: String, val to: String)
 
 object UpdateExecutor {
     /**
@@ -33,14 +39,17 @@ object UpdateExecutor {
     fun apply(plan: UpdatePlan, config: UpdaterConfig): ApplyResult {
         validateCurrentFiles(plan)
         check(!plan.hasConflicts) { "Resolve update conflicts before applying the update" }
+        // The loader goes first and its failure is fatal when the option is on: a target pack whose
+        // mods need the newer loader cannot boot on the old one, so committing the pack without it
+        // leaves the instance unstartable. Updating the loader and then failing leaves a bootable
+        // instance on the newer loader, which loaders tolerate.
+        val loaderUpdate = updateFabricLoader(plan, config, timeoutMs(config))
         if (plan.requiresRestart) {
             UpdateProgressTracker.phase(UpdatePhase.PREPARE, plan.targetVersion)
-            val timeoutMs = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000
             val transaction = UpdateTransactionManager(
-                timeoutMs = timeoutMs,
+                timeoutMs = timeoutMs(config),
                 listener = UpdateProgressTracker.listener,
-            ).prepare(plan, config)
-            updateFabricLoader(plan, config, timeoutMs)
+            ).prepare(plan, config, loaderUpdate)
             UpdateProgressTracker.done(transaction.id)
             return ApplyResult(
                 backup = null,
@@ -48,6 +57,7 @@ object UpdateExecutor {
                 reloadFailures = emptyList(),
                 transactionId = transaction.id,
                 requiresRestart = true,
+                loaderUpdate = loaderUpdate,
             )
         }
         UpdateProgressTracker.phase(UpdatePhase.BACKUP)
@@ -91,18 +101,27 @@ object UpdateExecutor {
         UpdateProgressTracker.phase(UpdatePhase.RELOAD)
         val reload = runCatching { HotReloadService.reload(config.experimentalHotReload) }
             .getOrElse { ReloadReport(true, listOf("Hot reload: ${it.message ?: it.javaClass.simpleName}")) }
-        // A loader-only bump has no jar changes, so it lands here; the new profile applies at next launch.
-        updateFabricLoader(plan, config, config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000)
         UpdateProgressTracker.done()
-        return ApplyResult(backup, reload.attempted && reload.failures.isEmpty(), reload.failures)
+        return ApplyResult(
+            backup = backup,
+            reloaded = reload.attempted && reload.failures.isEmpty(),
+            reloadFailures = reload.failures,
+            loaderUpdate = loaderUpdate,
+        )
     }
 
+    private fun timeoutMs(config: UpdaterConfig): Int = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000
+
     /**
-     * Overwrite-installs the Fabric loader version declared by the target mrpack.
+     * Installs the Fabric loader version the target mrpack declares, and returns what changed.
      *
-     * The transaction or configuration update has already been staged at this point, so a loader
-     * failure is recorded and swallowed rather than aborting the run: the modpack update stays
-     * usable on the current loader and the player sees why the loader step did not complete.
+     * This runs before any pack file is written: a target pack whose mods require the newer loader
+     * cannot boot on the old one, so committing the pack without the loader would leave the instance
+     * unstartable, while updating the loader first leaves it bootable either way. A failure is fatal
+     * when the option is on for the same reason — the caller must not commit a pack it cannot run.
+     *
+     * The version id comes from the running process command line, because an isolated launcher
+     * instance keeps its profile beside the game directory and names it after the instance.
      */
     internal fun updateFabricLoader(
         plan: UpdatePlan,
@@ -111,30 +130,41 @@ object UpdateExecutor {
         gameDir: Path = Platform.INSTANCE.gameDir,
         loaderId: String = Platform.INSTANCE.loaderId,
         currentLoaderVersion: String = Platform.INSTANCE.loaderVersion,
-    ) {
-        if (!config.updateFabricLoader || loaderId != "fabric") return
+        versionId: String? = currentVersionId(),
+    ): LoaderUpdate? {
+        if (!config.updateFabricLoader || loaderId != "fabric") return null
         val target = plan.targetLoaderVersion
-        if (!FabricLoaderUpdater.shouldUpdate(currentLoaderVersion, target)) return
+        if (!FabricLoaderUpdater.shouldUpdate(currentLoaderVersion, target)) return null
         val minecraftVersion = plan.minecraftVersion.ifBlank {
             config.minecraftVersion.trim().ifBlank { Platform.INSTANCE.minecraftVersion }
         }
-        try {
-            val installed = FabricLoaderUpdater.update(
+        val installed = try {
+            FabricLoaderUpdater.update(
                 gameDir = gameDir,
                 minecraftVersion = minecraftVersion,
                 currentLoaderVersion = currentLoaderVersion,
                 targetLoaderVersion = target,
                 timeoutMs = timeoutMs,
                 listener = UpdateProgressTracker.listener,
+                versionId = versionId,
             )
-            if (installed != null) {
-                Updater.LOGGER.info("Fabric loader {} is now installed over {}", installed, currentLoaderVersion)
-            }
         } catch (exception: Exception) {
-            Updater.LOGGER.error("Fabric loader update to {} failed", target, exception)
-            UpdateProgressTracker.message("Fabric loader update failed: ${exception.message ?: exception.javaClass.simpleName}")
+            UpdateProgressTracker.failed(exception.message ?: exception.javaClass.simpleName)
+            throw IllegalStateException(
+                "Unable to update Fabric loader to $target; the update was not applied",
+                exception,
+            )
+        }
+        return installed?.let {
+            Updater.LOGGER.info("Fabric loader {} replaced {}", it, currentLoaderVersion)
+            LoaderUpdate(currentLoaderVersion, it)
         }
     }
+
+    /** The `--version` id the launcher passed to this game, or null when it is not on the command line. */
+    internal fun currentVersionId(): String? = runCatching {
+        FabricLoaderUpdater.versionIdFromArguments(CurrentJvmCommand.capture().arguments())
+    }.getOrNull()
 
     fun rollbackLatest() {
         BackupManager.latest()?.let(BackupManager::restore)

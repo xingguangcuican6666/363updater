@@ -130,9 +130,16 @@ data class PackageSnapshot(
 
     val managedConfig: Map<String, PackageFile> get() = managedFiles.filterValues(PackageFile::isConfig)
 
-    /** Loader version the package expects, e.g. `fabric-loader` -> `0.16.14`; blank when unspecified. */
+    /**
+     * Loader version the package expects, e.g. `fabric-loader` -> `0.16.14`; blank when unspecified.
+     *
+     * The key is not the loader id: Fabric packs use `fabric-loader`, Forge packs use `forge` and
+     * NeoForge packs use `neoforge`. Only the Fabric key is consumed today, because that is the only
+     * loader the updater can install; the others are still read so a plan can report what the target
+     * pack declares.
+     */
     val loaderVersion: String
-        get() = dependencies.entries.firstOrNull { (key, _) -> key.endsWith("-loader") || key == "loader" }?.value.orEmpty()
+        get() = LOADER_KEYS.firstNotNullOfOrNull { dependencies[it] }?.takeIf(String::isNotBlank).orEmpty()
 
     val minecraftDependency: String get() = dependencies["minecraft"].orEmpty()
 
@@ -153,6 +160,9 @@ data class PackageSnapshot(
     }
 
     companion object {
+        /** Loader dependency keys in the order a pack may declare them; see [loaderVersion]. */
+        private val LOADER_KEYS = listOf("fabric-loader", "loader", "forge", "neoforge")
+
         private fun sha1(bytes: ByteArray): String = MessageDigest.getInstance("SHA-1").digest(bytes).toHex()
         private fun sha512(bytes: ByteArray): String = MessageDigest.getInstance("SHA-512").digest(bytes).toHex()
         private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }

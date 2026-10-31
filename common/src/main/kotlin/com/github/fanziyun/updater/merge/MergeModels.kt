@@ -86,9 +86,16 @@ data class UpdatePlan(
     val protectedFiles: List<FilePlan> get() = files.filter { it.protectedFile }
     val hasConflicts: Boolean get() = conflicts.isNotEmpty() || files.any(FilePlan::hasConflict)
 
-    /** True when the target package declares a newer loader than the installed one. */
+    /**
+     * True when the target package declares a newer Fabric loader than the installed one.
+     *
+     * Gated on the plan's loader because a Forge or NeoForge pack declares its loader version under a
+     * different dependency key, and the updater only knows how to install Fabric; showing those
+     * versions as an upgrade the updater will perform would be wrong.
+     */
     val loaderUpdateAvailable: Boolean
-        get() = targetLoaderVersion.isNotBlank() &&
+        get() = loader.equals("fabric", ignoreCase = true) &&
+            targetLoaderVersion.isNotBlank() &&
             currentLoaderVersion.isNotBlank() &&
             com.github.fanziyun.updater.util.SemVer.compare(targetLoaderVersion, currentLoaderVersion) > 0
 }

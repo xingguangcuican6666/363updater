@@ -65,6 +65,12 @@ data class TransactionRecord(
     val failure: String? = null,
     val startupMillis: Long = 0L,
     val peakCombinedRssBytes: Long = 0L,
+    /**
+     * Loader versions this transaction replaced, so the helper can tell the player that a launcher
+     * restart is what makes them take effect. Empty when the loader was already current.
+     */
+    val loaderPreviousVersion: String = "",
+    val loaderInstalledVersion: String = "",
 )
 
 data class PreparedTransaction(val path: Path, val record: TransactionRecord) {
@@ -85,7 +91,11 @@ class UpdateTransactionManager(
     private val root = cacheRoot.resolve("transactions")
     private val contentCache = ManagedFileCache(timeoutMs, cacheRoot.resolve("objects"), listener)
 
-    fun prepare(plan: UpdatePlan, config: UpdaterConfig): PreparedTransaction {
+    fun prepare(
+        plan: UpdatePlan,
+        config: UpdaterConfig,
+        loaderUpdate: com.github.fanziyun.updater.data.LoaderUpdate? = null,
+    ): PreparedTransaction {
         check(!plan.hasConflicts) { "Resolve managed-file conflicts before preparing the update" }
         val id = UUID.randomUUID().toString()
         val finalPath = root.resolve(id)
@@ -124,6 +134,8 @@ class UpdateTransactionManager(
                     TransactionFileChange(file.relativePath, file.action)
                 },
                 helperJar = helper,
+                loaderPreviousVersion = loaderUpdate?.from.orEmpty(),
+                loaderInstalledVersion = loaderUpdate?.to.orEmpty(),
             )
             writeRecord(temporary, record)
             moveAtomic(temporary, finalPath)
@@ -618,6 +630,16 @@ class UpdateTransactionManager(
         }
         require(record.helperJar == null || record.helperJar == "helper/updater-helper.jar") {
             "Invalid updater helper path"
+        }
+        // Loader versions come from the manifest the updater installed; keep them short and printable
+        // so a hand-edited transaction log cannot inject a long string into the restart screen.
+        listOf(record.loaderPreviousVersion, record.loaderInstalledVersion).forEach { version ->
+            require(version.length <= 64 && '\u0000' !in version && '\n' !in version && '\r' !in version) {
+                "Invalid updater loader version"
+            }
+        }
+        require(record.loaderInstalledVersion.isBlank() || record.loaderPreviousVersion.isNotBlank()) {
+            "Updater transaction records an installed loader without the replaced one"
         }
 
         val managedFiles = requireNotNull(record.managedFiles) { "Missing updater managed-file manifest" }

@@ -3,6 +3,14 @@ package com.github.fanziyun.updater.screen
 import net.minecraft.network.chat.Component
 
 object RestartReasonText {
+    /**
+     * True when [reason] says the launcher has to start the game again, which happens after the
+     * updater replaced the loader: an in-process restart relaunches the old loader jars from the
+     * captured command line, so it would boot the new mods on the old loader.
+     */
+    fun isLoaderRestart(reason: String): Boolean =
+        reasonKey(reason) == "screen.updater363.restart.reason.loader_restart"
+
     fun failure(reason: String): String = reasonKey(reason)?.let(::translated) ?: reason
 
     fun fastCapability(reason: String): String = capabilityReason(
@@ -21,6 +29,8 @@ object RestartReasonText {
     }
 
     internal fun reasonKey(reason: String): String? = when {
+        reason.startsWith("The launcher must restart this instance") ->
+            "screen.updater363.restart.reason.loader_restart"
         reason.startsWith("Fast restart is unavailable for this Minecraft") ->
             "screen.updater363.restart.reason.unsupported_profile"
         reason.startsWith("Fast restart requires a newly prepared transaction") ||

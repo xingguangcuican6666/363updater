@@ -67,6 +67,16 @@ class MrpackReaderTest {
     }
 
     @Test
+    fun `loaderVersion reads each loader's dependency key`() {
+        // Real packs use a different key per loader, and Forge/NeoForge omit the `-loader` suffix:
+        // fabric -> "fabric-loader": "0.14.17", forge -> "forge": "52.1.8", neoforge -> "neoforge": "26.2.0.10-beta".
+        assertEquals("0.14.17", snapshotWith("""{"minecraft":"1.19.2","fabric-loader":"0.14.17"}""").loaderVersion)
+        assertEquals("52.1.8", snapshotWith("""{"minecraft":"1.21.1","forge":"52.1.8"}""").loaderVersion)
+        assertEquals("26.2.0.10-beta", snapshotWith("""{"minecraft":"26.2","neoforge":"26.2.0.10-beta"}""").loaderVersion)
+        assertEquals("", snapshotWith("""{"minecraft":"1.20.1"}""").loaderVersion)
+    }
+
+    @Test
     fun `rejects unsafe archive paths instead of silently ignoring them`() {
         val path = Files.createTempFile("363updater", ".mrpack")
         ZipOutputStream(Files.newOutputStream(path)).use { zip ->
@@ -99,6 +109,17 @@ class MrpackReaderTest {
             )
         }
         assertFailsWith<IllegalArgumentException> { MrpackReader.read(duplicate, "test") }
+    }
+
+    private fun snapshotWith(dependencies: String): PackageSnapshot {
+        val path = Files.createTempFile("363updater", ".mrpack")
+        ZipOutputStream(Files.newOutputStream(path)).use { zip ->
+            zip.write(
+                "modrinth.index.json",
+                """{"formatVersion":1,"game":"minecraft","files":[],"dependencies":$dependencies}""",
+            )
+        }
+        return MrpackReader.read(path, "test")
     }
 
     private fun ZipOutputStream.write(name: String, value: String) {

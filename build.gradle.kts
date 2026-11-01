@@ -70,6 +70,11 @@ subprojects {
 
     tasks.withType<KotlinCompile>().configureEach {
         compilerOptions.jvmTarget.set(JvmTarget.fromTarget(javaVersion.toString()))
+        // The mod runs on the Kotlin runtime a *player's* Fabric Language Kotlin provides, not on the
+        // one we compile with. Pinning the API level to the oldest Kotlin 2.x stdlib we support means
+        // the bytecode cannot reference a newer stdlib symbol, so a pack that ships an older FLK still
+        // loads us instead of failing with NoSuchMethodError.
+        compilerOptions.apiVersion.set(org.jetbrains.kotlin.gradle.dsl.KotlinVersion.KOTLIN_1_9)
     }
 
     tasks.withType<ProcessResources>().configureEach { filteringCharset = "UTF-8" }

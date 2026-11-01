@@ -1,38 +1,33 @@
 package com.github.fanziyun.updater.data
 
 import com.github.fanziyun.updater.Updater
-import com.github.fanziyun.updater.handoff.CurrentJvmCommand
 import com.github.fanziyun.updater.progress.ProgressListener
 import com.github.fanziyun.updater.progress.UpdatePhase
 import com.github.fanziyun.updater.util.SemVer
-import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import java.net.HttpURLConnection
 import java.net.URI
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
-import java.util.Locale
-
-class FabricLoaderUpdateException(message: String, cause: Throwable? = null) : java.io.IOException(message, cause)
+import java.security.MessageDigest
 
 /**
- * Installs the Fabric loader version declared by the target mrpack over the current installation.
+ * Installs the loader libraries a mrpack declares, in a launcher-agnostic way.
  *
- * Launchers such as HMCL, PCL and Prism keep the loader version pinned in the instance profile
- * (`<instance>/<id>.json`) and resolve libraries from a shared `libraries/` root. Running the Fabric
- * installer against the game directory does not change those, so it has no effect on such an
- * instance: it writes a `versions/fabric-loader-*` profile nothing reads, and the next launch still
- * uses the pinned loader. The change that takes effect everywhere is the loader library set inside
- * the profile the launcher actually loads, plus the jars behind it.
+ * The updater does not model launchers. It resolves the Maven coordinates the Fabric meta API
+ * publishes for the target loader, puts those jars in the one `libraries/` root the running JVM
+ * resolves from, and records the resulting library set so the relaunch can be rebuilt from the
+ * JVM's own argv instead of from any launcher's profile format.
  *
- * So the update resolves the loader metadata from the Fabric meta API, downloads every library the
- * target loader needs into the resolved `libraries/` root, and rewrites the profile in place. The
- * instance keeps its name, JVM arguments and other launcher settings.
+ * What this replaces: running the Fabric installer against the game directory only writes a
+ * `versions/fabric-loader-*` profile, and isolated instances resolve their classpath from a shared
+ * `libraries/` root plus whatever the launcher captured at start, so the installer has no effect on
+ * them. Downloading the exact jars and rebuilding the relaunch classpath does, for every launcher.
  *
- * Patching the profile only affects a launch the launcher builds afterwards. A restart that reuses
- * the captured command line still pins the old loader jars by path, so [classpathReplacements] maps
- * those paths onto the jars the patched profile declares and the relaunch boots the new loader.
+ * Profile files are still consulted when present, but only as an optional hint for [resolveLibrariesRoot]
+ * and for verifying the jars landed; no launcher-specific JSON shape is rewritten or required.
  */
 object FabricLoaderUpdater {
     const val META_ROOT = "https://meta.fabricmc.net/v2"
@@ -51,32 +46,6 @@ object FabricLoaderUpdater {
     }
 
     /**
-     * The loader version a profile resolves to, or null when the profile has no loader.
-     *
-     * The `patches[]` chain is authoritative because that is what HMCL, Prism and PCL build the
-     * classpath from; the top-level `libraries` array is a flattened snapshot they may not read. A
-     * profile can carry the two out of step — a previous updater run patched only the top level, so
-     * the launcher kept resolving the old loader — so this never trusts the snapshot alone.
-     */
-    fun profileLoaderVersion(profile: JsonObject): String? =
-        loaderVersionFrom(profile.getAsJsonArray("patches")?.flatMap { element ->
-            element.takeIf { it.isJsonObject }?.asJsonObject?.getAsJsonArray("libraries")?.mapNotNull { library ->
-                library.takeIf { it.isJsonObject }?.asJsonObject?.get("name")
-                    ?.takeIf { it.isJsonPrimitive }?.asString
-            }.orEmpty()
-        }?.toList().orEmpty())
-            ?: loaderVersionFrom(
-                profile.getAsJsonArray("libraries")?.mapNotNull { element ->
-                    element.takeIf { it.isJsonObject }?.asJsonObject?.get("name")
-                        ?.takeIf { it.isJsonPrimitive }?.asString
-                }.orEmpty(),
-            )
-
-    private fun loaderVersionFrom(names: List<String>): String? =
-        names.firstOrNull { it.startsWith("$LOADER_ARTIFACT:") }
-            ?.substringAfterLast(':')?.takeIf(String::isNotBlank)
-
-    /**
      * The libraries a target loader needs, in classpath order.
      *
      * `loader.maven` and `intermediary.maven` carry the loader itself and the intermediary jar; the
@@ -84,7 +53,7 @@ object FabricLoaderUpdater {
      * loader depends on. `client` and `development` groups are empty for release loaders and are only
      * included when the launcher meta actually populates them.
      */
-    fun librariesFor(payload: String): List<FabricProfilePatcher.Library> {
+    fun librariesFor(payload: String): List<LoaderLibrary> {
         val root = JsonParser.parseString(payload).asJsonObject
         val loader = root.getAsJsonObject("loader")
             ?: throw FabricLoaderUpdateException("Fabric meta has no loader section")
@@ -95,9 +64,9 @@ object FabricLoaderUpdater {
         val launcherMeta = root.getAsJsonObject("launcherMeta")
             ?: throw FabricLoaderUpdateException("Fabric meta has no launcherMeta section")
 
-        val libraries = linkedMapOf<String, FabricProfilePatcher.Library>()
+        val libraries = linkedMapOf<String, LoaderLibrary>()
         fun add(maven: String, url: String?, sha1: String?) {
-            val library = FabricProfilePatcher.Library(maven.trim(), url?.trim(), sha1?.lowercase())
+            val library = LoaderLibrary(maven.trim(), url?.trim(), sha1?.lowercase())
             libraries[library.artifact] = library
         }
 
@@ -124,9 +93,8 @@ object FabricLoaderUpdater {
     /**
      * Reads the `--version` value from a launcher command line.
      *
-     * An isolated instance stores its profile beside the game directory, so the version id is what
-     * names it; launchers pass `--version <id>` to the game, which makes the command line the most
-     * reliable source.
+     * Kept because it names the instance for logging and for locating the profile hint; nothing in
+     * the install path depends on it.
      */
     fun versionIdFromArguments(arguments: List<String>): String? {
         var index = 0
@@ -142,103 +110,43 @@ object FabricLoaderUpdater {
     }
 
     /**
-     * Resolves the loader jar paths a captured command line pins onto the jars the instance profile
-     * now declares, so a relaunch of that command line boots the updated loader.
+     * Resolve the `libraries/` root the running JVM reads from.
      *
-     * Returns an empty plan when the profile cannot be resolved or nothing needs replacing; callers
-     * treat that as "relaunch unchanged".
+     * The definitive source is the captured classpath: whichever directory the loader jars already
+     * came from is the one the next launch will read. [gameDir] and its parents are only a fallback
+     * for a launch that had no classpath at all.
      */
-    fun classpathPlan(
-        gameDir: Path,
-        arguments: List<String>,
-        versionId: String? = null,
-    ): LoaderLibraryRewrite.Plan {
-        val classpath = classpathEntries(arguments)
-        if (classpath.isEmpty()) return LoaderLibraryRewrite.Plan(emptyMap(), emptyList())
-        val profilePath = FabricProfilePatcher.resolveProfile(gameDir, versionId)
-            ?: return LoaderLibraryRewrite.Plan(emptyMap(), emptyList())
-        val profile = runCatching {
-            JsonParser.parseString(Files.readString(profilePath, Charsets.UTF_8)).asJsonObject
-        }.getOrNull() ?: return LoaderLibraryRewrite.Plan(emptyMap(), emptyList())
-        val libraries = declaredLibraries(profile)
-            ?: return LoaderLibraryRewrite.Plan(emptyMap(), emptyList())
-        val plan = LoaderLibraryRewrite.plan(
-            classpath,
-            FabricProfilePatcher.resolveLibrariesRoot(gameDir),
-            libraries,
-        )
-        if (!plan.isEmpty) {
-            Updater.LOGGER.info(
-                "Relaunch loader jars: {} rewritten, {} unresolved",
-                plan.replacements.size,
-                plan.unresolved.size,
-            )
+    fun resolveLibrariesRoot(gameDir: Path, classpath: List<String> = emptyList()): Path {
+        LoaderLibraryPlanner.librariesRootFromClasspath(classpath)?.let { return it }
+        val root = gameDir.toAbsolutePath().normalize()
+        var candidate: Path? = root
+        var depth = 0
+        while (candidate != null && depth < 4) {
+            val libraries = candidate.resolve("libraries")
+            if (Files.isDirectory(libraries, LinkOption.NOFOLLOW_LINKS)) return libraries
+            candidate = candidate.parent
+            depth++
         }
-        return plan
+        return root.resolve("libraries")
     }
-
-    /** The jar paths a `-cp` argument carries, across every classpath option the JVM accepts. */
-    fun classpathEntries(arguments: List<String>): List<String> {
-        val entries = mutableListOf<String>()
-        // Application arguments are skipped so a game argument resembling an option cannot be read
-        // as a classpath; locateMainIndex reports the boundary the JVM itself uses.
-        val limit = runCatching { CurrentJvmCommand.locateMainIndex(arguments) }.getOrElse { arguments.size }
-        var index = 0
-        while (index < limit) {
-            val argument = arguments[index]
-            val option = CLASSPATH_OPTIONS.firstOrNull { argument == it || argument.startsWith("$it=") }
-            if (option == null) {
-                index++
-                continue
-            }
-            val value = if (argument.length > option.length) argument.substring(option.length + 1)
-            else arguments.getOrNull(++index).orEmpty()
-            entries += LoaderLibraryRewrite.entries(value)
-            index++
-        }
-        return entries
-    }
-
-    private fun declaredLibraries(profile: JsonObject): List<FabricProfilePatcher.Library>? {
-        // Prefer the patches chain: that is what HMCL and friends build the classpath from.
-        val fromPatches = profile.getAsJsonArray("patches")?.flatMap { element ->
-            val patch = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@flatMap emptyList()
-            patch.getAsJsonArray("libraries")?.mapNotNull { libraryElement(it) }.orEmpty()
-        }?.takeIf(List<*>::isNotEmpty)
-        if (fromPatches != null) return fromPatches
-        return profile.getAsJsonArray("libraries")?.mapNotNull { libraryElement(it) }?.takeIf(List<*>::isNotEmpty)
-    }
-
-    private fun libraryElement(element: com.google.gson.JsonElement): FabricProfilePatcher.Library? {
-        val name = element.takeIf { it.isJsonObject }?.asJsonObject?.get("name")
-            ?.takeIf { it.isJsonPrimitive }?.asString ?: return null
-        return runCatching { FabricProfilePatcher.Library(name, null, null) }.getOrNull()
-    }
-
-    private val CLASSPATH_OPTIONS = listOf("-cp", "-classpath", "--class-path")
 
     /**
-     * Downloads the target loader's libraries and points the instance profile at them.
+     * Downloads the target loader's libraries and returns their absolute paths in classpath order.
      *
-     * Returns the installed version, or `null` when no update is needed. Every step is reported
-     * through [listener] under [UpdatePhase.LOADER]. Throws when the profile cannot be located or a
-     * library cannot be fetched, so the caller can surface the reason instead of silently launching
-     * the old loader again.
+     * Returns `null` when no update is needed. Every step is reported through [listener] under
+     * [UpdatePhase.LOADER]. Throws when a library cannot be fetched or does not match the SHA-1 the
+     * meta published, so the caller never relaunches with a half-installed loader.
      */
-    fun update(
-        gameDir: Path,
+    fun install(
         minecraftVersion: String,
         currentLoaderVersion: String,
         targetLoaderVersion: String,
+        librariesRoot: Path,
         timeoutMs: Int,
         listener: ProgressListener = ProgressListener.NONE,
-        versionId: String? = null,
-    ): String? {
+    ): FabricLoaderInstall? {
         if (!shouldUpdate(currentLoaderVersion, targetLoaderVersion)) return null
-        listener.phase(
-            UpdatePhase.LOADER,
-            "fabric-loader $currentLoaderVersion -> $targetLoaderVersion",
-        )
+        listener.phase(UpdatePhase.LOADER, "fabric-loader $currentLoaderVersion -> $targetLoaderVersion")
 
         val payload = request(loaderMetaUrl(minecraftVersion, targetLoaderVersion), timeoutMs)
             ?: throw FabricLoaderUpdateException(
@@ -253,55 +161,45 @@ object FabricLoaderUpdater {
         }
 
         val libraries = librariesFor(payload)
-        if (libraries.none { it.artifact == LOADER_ARTIFACT }) {
-            throw FabricLoaderUpdateException("Fabric meta declared no $LOADER_ARTIFACT library")
-        }
-        val librariesRoot = FabricProfilePatcher.resolveLibrariesRoot(gameDir)
-
-        // Download first: a profile that points at missing jars is worse than the current one.
+        val loaderLibrary = libraries.firstOrNull { it.artifact == LOADER_ARTIFACT }
+            ?: throw FabricLoaderUpdateException("Fabric meta declared no $LOADER_ARTIFACT library")
         val pending = libraries.filter { library ->
-            val jar = librariesRoot.resolve(library.relativePath)
-            !FabricProfilePatcher.libraryPresent(jar, library)
+            !library.presentIn(librariesRoot)
         }
         if (pending.isNotEmpty()) {
             listener.message("downloading ${pending.size} loader librar${if (pending.size == 1) "y" else "ies"}")
             pending.forEach { library -> downloadLibrary(librariesRoot, library, timeoutMs, listener) }
         }
 
-        val profilePath = FabricProfilePatcher.resolveProfile(gameDir, versionId)
-            ?: throw FabricLoaderUpdateException(
-                "No launcher profile pinning $LOADER_ARTIFACT was found under $gameDir",
-            )
-        val profile = JsonParser.parseString(
-            Files.readString(profilePath, Charsets.UTF_8),
-        ).asJsonObject
-        val patched = FabricProfilePatcher.patchProfile(profile, libraries, mainClassFor(payload))
-        FabricProfilePatcher.writeProfile(profilePath, patched)
-
-        val applied = profileLoaderVersion(patched)
-        if (applied != targetLoaderVersion) {
-            throw FabricLoaderUpdateException(
-                "Profile ${profilePath.fileName} still resolves fabric-loader ${applied ?: "?"}",
-            )
+        val jars = libraries.map { it.jarPath(librariesRoot) }
+        jars.forEach { jar ->
+            require(Files.isRegularFile(jar, LinkOption.NOFOLLOW_LINKS)) {
+                "Loader library is missing after download: $jar"
+            }
+        }
+        require(FabricLoaderInstall(libraries, jars, mainClassFor(payload), librariesRoot)
+            .resolveLoaderVersion() == targetLoaderVersion) {
+            "Installed libraries do not resolve fabric-loader $targetLoaderVersion"
         }
         Updater.LOGGER.info(
-            "Patched {} to fabric-loader {} ({} libraries downloaded) over {}",
-            profilePath,
+            "Installed fabric-loader {} ({} of {} jars downloaded) over {} into {}",
             targetLoaderVersion,
             pending.size,
+            jars.size,
             currentLoaderVersion,
+            librariesRoot,
         )
-        return targetLoaderVersion
+        return FabricLoaderInstall(libraries, jars, mainClassFor(payload), librariesRoot)
     }
 
     private fun downloadLibrary(
         librariesRoot: Path,
-        library: FabricProfilePatcher.Library,
+        library: LoaderLibrary,
         timeoutMs: Int,
         listener: ProgressListener,
     ) {
         val url = library.downloadUrl() ?: libraryUrl(library)
-        val destination = librariesRoot.resolve(library.relativePath)
+        val destination = library.jarPath(librariesRoot)
         val label = destination.fileName.toString()
         listener.startFile(label, -1L)
         Files.createDirectories(destination.parent)
@@ -335,7 +233,7 @@ object FabricLoaderUpdater {
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)
             }
-            require(FabricProfilePatcher.libraryPresent(destination, library)) {
+            require(library.presentIn(librariesRoot)) {
                 "Downloaded $label does not match the SHA-1 from Fabric meta"
             }
             listener.finishFile(label, total)
@@ -347,7 +245,7 @@ object FabricLoaderUpdater {
     }
 
     /** Fallback URL for coordinates the meta did not carry a mirror for. */
-    private fun libraryUrl(library: FabricProfilePatcher.Library): String =
+    private fun libraryUrl(library: LoaderLibrary): String =
         "https://maven.fabricmc.net/${library.relativePath}"
 
     private fun request(url: String, timeoutMs: Int): String? {
@@ -370,7 +268,7 @@ object FabricLoaderUpdater {
 
     private fun open(url: String, timeoutMs: Int): HttpURLConnection {
         val uri = URI.create(url)
-        require(uri.scheme?.lowercase(Locale.ROOT) in setOf("http", "https") && !uri.host.isNullOrBlank()) {
+        require(uri.scheme?.lowercase(java.util.Locale.ROOT) in setOf("http", "https") && !uri.host.isNullOrBlank()) {
             "Fabric meta URL must be HTTP(S)"
         }
         val connection = uri.toURL().openConnection() as HttpURLConnection
@@ -391,82 +289,178 @@ object FabricLoaderUpdater {
         java.net.URLEncoder.encode(value.trim(), Charsets.UTF_8).replace("+", "%20")
 }
 
-/**
- * Rewrites the loader jars a captured launch command line pins by path.
- *
- * A command line built from the old profile names every library jar absolutely, so relaunching it
- * after a loader update would load the jars the running game already has open. Classpath entries are
- * matched by their Maven layout under the shared `libraries/` root: an entry whose group and artifact
- * the new profile also declares, at a different version, is replaced by the jar the profile now
- * points at. Entries outside the root, and ones already at the declared version, are left alone.
- *
- * [plan] reports both the replacements and the entries that could not be resolved, so the restart path
- * can refuse rather than relaunch with a stale jar on the classpath.
- */
-object LoaderLibraryRewrite {
-    /** [replacements] maps old absolute path to new; [unresolved] lists entries left stale. */
-    data class Plan(val replacements: Map<String, String>, val unresolved: List<String>) {
-        val isEmpty: Boolean get() = replacements.isEmpty() && unresolved.isEmpty()
-    }
+/** A Maven coordinate from `launcherMeta.libraries`; a classifier is allowed. */
+data class LoaderLibrary(
+    val name: String,
+    val url: String?,
+    val sha1: String?,
+) {
+    private val parts: List<String> get() = name.trim().split(':').filter(String::isNotBlank)
+
+    /** `group:artifact`, used to match an existing classpath entry. */
+    val artifact: String
+        get() {
+            val coordinates = parts
+            require(coordinates.size >= 3) { "Invalid library coordinate: $name" }
+            return "${coordinates[0]}:${coordinates[1]}"
+        }
+
+    val version: String
+        get() = parts[2]
 
     /**
-     * @param classpath absolute jar paths from a captured command line, in order
-     * @param librariesRoot the shared `libraries/` directory the launcher resolves from
-     * @param libraries the libraries the patched profile declares
+     * The `libraries/`-relative path, derived from the coordinate rather than from any launcher
+     * layout, so the same rule works for every launcher that resolves Maven libraries.
      */
-    fun plan(
-        classpath: List<String>,
-        librariesRoot: Path,
-        libraries: List<FabricProfilePatcher.Library>,
-    ): Plan {
-        if (classpath.isEmpty() || libraries.isEmpty()) return Plan(emptyMap(), emptyList())
-        val root = librariesRoot.toAbsolutePath().normalize()
-        // Key on group path + artifact so a version bump is the only thing that can differ.
-        val declared = libraries.mapNotNull { library ->
-            val segments = library.relativePath.split('/')
-            // <group dirs>/<artifact>/<version>/<file>.jar
-            if (segments.size < 4) return@mapNotNull null
-            val artifact = segments[segments.size - 3]
-            val groupPath = segments.take(segments.size - 3).joinToString("/")
-            "$groupPath/$artifact" to library.relativePath
-        }.toMap()
-        if (declared.isEmpty()) return Plan(emptyMap(), emptyList())
+    val relativePath: String
+        get() {
+            val coordinates = parts
+            require(coordinates.size >= 3) { "Invalid library coordinate: $name" }
+            val group = coordinates[0].replace('.', '/')
+            val artifactId = coordinates[1]
+            val version = coordinates[2]
+            val classifier = coordinates.drop(3).joinToString("-")
+            val fileName = if (classifier.isEmpty()) "$artifactId-$version.jar"
+            else "$artifactId-$version-$classifier.jar"
+            return "$group/$artifactId/$version/$fileName"
+        }
 
-        val replacements = linkedMapOf<String, String>()
-        val unresolved = mutableListOf<String>()
-        classpath.forEach { entry ->
-            if (entry.isBlank()) return@forEach
-            val path = runCatching { Path.of(entry) }.getOrNull() ?: return@forEach
-            if (!path.isAbsolute) return@forEach
-            val normalized = path.normalize()
-            if (!normalized.startsWith(root)) return@forEach
+    fun downloadUrl(): String? {
+        val base = url?.trim()?.takeIf(String::isNotEmpty) ?: return null
+        val separator = if (base.endsWith('/')) "" else "/"
+        return "$base$separator$relativePath"
+    }
+
+    fun jarPath(librariesRoot: Path): Path = librariesRoot.resolve(relativePath).normalize()
+
+    /** True when the jar is on disk with a matching SHA-1 (or no published hash to check). */
+    fun presentIn(librariesRoot: Path): Boolean {
+        val jar = jarPath(librariesRoot)
+        if (!Files.isRegularFile(jar, LinkOption.NOFOLLOW_LINKS) || Files.isSymbolicLink(jar)) return false
+        val expected = sha1?.lowercase() ?: return true
+        return runCatching { sha1Of(jar) == expected }.getOrDefault(false)
+    }
+
+    companion object {
+        /** The coordinate a jar under [librariesRoot] stands for, or null when it is not Maven-shaped. */
+        fun fromJarPath(jar: Path, librariesRoot: Path): LoaderLibrary? {
+            val root = librariesRoot.toAbsolutePath().normalize()
+            val normalized = jar.toAbsolutePath().normalize()
+            if (!normalized.startsWith(root)) return null
             val segments = root.relativize(normalized).toString().split('/', '\\').filter(String::isNotEmpty)
-            if (segments.size < 4) return@forEach
-            val artifact = segments[segments.size - 3]
-            val groupPath = segments.take(segments.size - 3).joinToString("/")
-            val replacement = declared["$groupPath/$artifact"] ?: return@forEach
-            if (replacement == segments.joinToString("/")) return@forEach
-            val target = root.resolve(replacement)
-            if (Files.isRegularFile(target)) {
-                replacements[normalized.toString()] = target.toString()
-            } else {
-                // The profile declares a jar that is not on disk; relaunching would keep the old one.
-                unresolved += normalized.toString()
+            if (segments.size < 4) return null
+            val fileName = segments.last()
+            if (!fileName.endsWith(".jar")) return null
+            val version = segments[segments.size - 2]
+            val artifactId = segments[segments.size - 3]
+            val group = segments.take(segments.size - 3).joinToString(".")
+            val base = fileName.removeSuffix(".jar")
+            val expectedBase = "$artifactId-$version"
+            val classifier = when {
+                base == expectedBase -> ""
+                base.startsWith("$expectedBase-") -> base.removePrefix("$expectedBase-")
+                else -> return null
+            }
+            val name = if (classifier.isEmpty()) "$group:$artifactId:$version"
+            else "$group:$artifactId:$version:$classifier"
+            return runCatching { LoaderLibrary(name, null, null) }.getOrNull()
+        }
+
+        internal fun sha1Of(path: Path): String {
+            val digest = MessageDigest.getInstance("SHA-1")
+            Files.newInputStream(path).use { input ->
+                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    digest.update(buffer, 0, count)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+    }
+}
+
+/**
+ * The loader libraries a transaction installed, and the classpath they stand for.
+ *
+ * This is what the relaunch needs: absolute jar paths in the order the loader meta declares, plus the
+ * main class. Nothing here depends on a launcher's profile format.
+ */
+data class FabricLoaderInstall(
+    val libraries: List<LoaderLibrary>,
+    val jars: List<Path>,
+    val mainClass: String?,
+    val librariesRoot: Path,
+) {
+    fun resolveLoaderVersion(): String? = libraries.firstOrNull { it.artifact == "net.fabricmc:fabric-loader" }?.version
+}
+
+/**
+ * Rebuilds a classpath from the loader libraries a relaunch has to use.
+ *
+ * The captured JVM argv is the only launcher-neutral source of the classpath, so the planner works on
+ * plain path lists: keep every entry the JVM was started with, drop the entries that belong to a
+ * loader library (anything Maven-shaped under the libraries root), then insert the installed loader
+ * jars where the first dropped one was. Entries outside the libraries root — the game jar, user-added
+ * paths — are never reordered or dropped.
+ */
+object LoaderLibraryPlanner {
+    /** The jar paths a relaunch classpath should carry, given the captured one. */
+    fun relaunchClasspath(captured: List<String>, install: FabricLoaderInstall): List<String> {
+        val root = install.librariesRoot.toAbsolutePath().normalize()
+        val installed = install.jars.map { it.toAbsolutePath().normalize().toString() }
+        if (captured.isEmpty()) return installed
+
+        val result = mutableListOf<String>()
+        var inserted = false
+        captured.forEach { entry ->
+            if (entry.isBlank()) return@forEach
+            val path = runCatching { Path.of(entry) }.getOrNull()
+            val isLoaderLibrary = path != null && path.isAbsolute &&
+                path.toAbsolutePath().normalize().startsWith(root) &&
+                LoaderLibrary.fromJarPath(path, root) != null
+            when {
+                isLoaderLibrary && !inserted -> {
+                    result += installed
+                    inserted = true
+                }
+                isLoaderLibrary -> Unit
+                else -> result += entry
             }
         }
-        return Plan(replacements, unresolved)
+        if (!inserted) result += installed
+        return result
     }
 
-    fun replacements(
-        classpath: List<String>,
-        librariesRoot: Path,
-        libraries: List<FabricProfilePatcher.Library>,
-    ): Map<String, String> = plan(classpath, librariesRoot, libraries).replacements
+    /** The `libraries/` root the captured classpath resolves from, or null when it has none. */
+    fun librariesRootFromClasspath(captured: List<String>): Path? {
+        val counts = mutableMapOf<Path, Int>()
+        captured.forEach { entry ->
+            val path = runCatching { Path.of(entry) }.getOrNull() ?: return@forEach
+            if (!path.isAbsolute) return@forEach
+            val library = findLibrariesRoot(path) ?: return@forEach
+            counts[library] = (counts[library] ?: 0) + 1
+        }
+        return counts.maxByOrNull { it.value }?.key
+    }
 
     /**
-     * Splits a `-cp` value into entries. Kept here so the caller and the tests agree on the separator
-     * rules, including the empty trailing entry a trailing separator produces.
+     * Walk up from [jar] until a directory named `libraries` is found, requiring the Maven layout
+     * under it so an unrelated path that happens to contain a `libraries` segment cannot match.
      */
-    fun entries(classpathValue: String): List<String> =
-        classpathValue.split(java.io.File.pathSeparator).filter(String::isNotBlank)
+    fun findLibrariesRoot(jar: Path): Path? {
+        var candidate = jar.parent ?: return null
+        var depth = 0
+        while (depth < 8) {
+            if (candidate.fileName?.toString() == "libraries") {
+                if (LoaderLibrary.fromJarPath(jar, candidate) != null) return candidate
+            }
+            candidate = candidate.parent ?: return null
+            depth++
+        }
+        return null
+    }
 }
+
+class FabricLoaderUpdateException(message: String, cause: Throwable? = null) : java.io.IOException(message, cause)

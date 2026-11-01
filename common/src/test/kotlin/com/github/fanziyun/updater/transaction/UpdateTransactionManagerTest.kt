@@ -162,17 +162,28 @@ class UpdateTransactionManagerTest {
     fun `records the replaced loader versions so a restart can tell the player to use the launcher`() {
         val fixture = fixture()
 
+        val librariesRoot = fixture.gameDir.resolve("libraries")
+        Files.createDirectories(librariesRoot.resolve("net/fabricmc/fabric-loader/0.19.5"))
         val transaction = fixture.manager.prepare(
             fixture.plan,
             fixture.config,
-            com.github.fanziyun.updater.data.LoaderUpdate("0.19.3", "0.19.5"),
+            LoaderInstallRecord(
+                previousVersion = "0.19.3",
+                installedVersion = "0.19.5",
+                libraries = listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"),
+                librariesRoot = librariesRoot,
+                mainClass = "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            ),
         )
 
         assertEquals("0.19.3", transaction.record.loaderPreviousVersion)
         assertEquals("0.19.5", transaction.record.loaderInstalledVersion)
-        // The record is what the restart path re-reads from disk, so it has to survive the roundtrip.
+        assertEquals(listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"), transaction.record.loaderLibraries)
+        assertEquals(librariesRoot.toString(), transaction.record.loaderLibrariesRoot)
+        // The record is what the relaunch re-reads from disk, so it has to survive the roundtrip.
         val reloaded = fixture.manager.load(transaction.id)
         assertEquals("0.19.5", reloaded.record.loaderInstalledVersion)
+        assertEquals(listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"), reloaded.record.loaderLibraries)
     }
 
     @Test

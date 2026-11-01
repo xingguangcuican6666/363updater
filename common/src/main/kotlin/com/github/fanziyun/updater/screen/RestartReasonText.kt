@@ -29,7 +29,7 @@ object RestartReasonText {
     }
 
     internal fun reasonKey(reason: String): String? = when {
-        reason.startsWith("The launcher must restart this instance") ->
+        reason.startsWith("The updater could not apply fabric-loader") ->
             "screen.updater363.restart.reason.loader_restart"
         reason.startsWith("Fast restart is unavailable for this Minecraft") ->
             "screen.updater363.restart.reason.unsupported_profile"

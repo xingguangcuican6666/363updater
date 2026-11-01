@@ -66,11 +66,15 @@ data class TransactionRecord(
     val startupMillis: Long = 0L,
     val peakCombinedRssBytes: Long = 0L,
     /**
-     * Loader versions this transaction replaced, so the helper can tell the player that a launcher
-     * restart is what makes them take effect. Empty when the loader was already current.
+     * Loader this transaction installed, as the Maven coordinates plus the `libraries/` root they
+     * live under. The relaunch recomputes jar paths from the coordinates and rebuilds the classpath
+     * from the JVM argv, so no launcher profile format is stored or required.
      */
     val loaderPreviousVersion: String = "",
     val loaderInstalledVersion: String = "",
+    val loaderLibraries: List<String> = emptyList(),
+    val loaderLibrariesRoot: String = "",
+    val loaderMainClass: String? = null,
 )
 
 data class PreparedTransaction(val path: Path, val record: TransactionRecord) {
@@ -94,7 +98,7 @@ class UpdateTransactionManager(
     fun prepare(
         plan: UpdatePlan,
         config: UpdaterConfig,
-        loaderUpdate: com.github.fanziyun.updater.data.LoaderUpdate? = null,
+        loaderInstall: LoaderInstallRecord? = null,
     ): PreparedTransaction {
         check(!plan.hasConflicts) { "Resolve managed-file conflicts before preparing the update" }
         val id = UUID.randomUUID().toString()
@@ -134,8 +138,11 @@ class UpdateTransactionManager(
                     TransactionFileChange(file.relativePath, file.action)
                 },
                 helperJar = helper,
-                loaderPreviousVersion = loaderUpdate?.from.orEmpty(),
-                loaderInstalledVersion = loaderUpdate?.to.orEmpty(),
+                loaderPreviousVersion = loaderInstall?.previousVersion.orEmpty(),
+                loaderInstalledVersion = loaderInstall?.installedVersion.orEmpty(),
+                loaderLibraries = loaderInstall?.libraries.orEmpty(),
+                loaderLibrariesRoot = loaderInstall?.librariesRoot?.toString().orEmpty(),
+                loaderMainClass = loaderInstall?.mainClass,
             )
             writeRecord(temporary, record)
             moveAtomic(temporary, finalPath)
@@ -641,6 +648,21 @@ class UpdateTransactionManager(
         require(record.loaderInstalledVersion.isBlank() || record.loaderPreviousVersion.isNotBlank()) {
             "Updater transaction records an installed loader without the replaced one"
         }
+        // The relaunch rebuilds jar paths from these coordinates, so a stored root must be absolute and
+        // every coordinate must parse; a malformed log is rejected instead of half-applied.
+        if (record.loaderLibraries.isNotEmpty()) {
+            require(record.loaderInstalledVersion.isNotBlank()) {
+                "Updater transaction records loader libraries without an installed version"
+            }
+            require(record.loaderLibraries.size <= MAX_LOADER_LIBRARIES) { "Too many updater loader libraries" }
+            val librariesRoot = requireText(record.loaderLibrariesRoot, "loaderLibrariesRoot")
+            require(Path.of(librariesRoot).isAbsolute) { "Invalid updater loader libraries root" }
+            record.loaderLibraries.forEach { coordinate ->
+                requireText(coordinate, "loader library")
+                require(coordinate.split(':').size in 3..4) { "Invalid updater loader library coordinate" }
+            }
+            record.loaderMainClass?.let { requireText(it, "loaderMainClass") }
+        }
 
         val managedFiles = requireNotNull(record.managedFiles) { "Missing updater managed-file manifest" }
         val modChanges = requireNotNull(record.modChanges) { "Missing updater mod changes" }
@@ -727,5 +749,22 @@ class UpdateTransactionManager(
         private const val MAX_TRANSACTION_FILES = 16_384
         private const val MAX_TRANSACTION_LOG_BYTES = 8L * 1024L * 1024L
         private const val MAX_HELPER_JAR_BYTES = 64L * 1024L * 1024L
+        private const val MAX_LOADER_LIBRARIES = 64
     }
 }
+
+/**
+ * What a loader install put on disk, recorded so a relaunch can rebuild its classpath without any
+ * launcher-specific profile.
+ *
+ * [libraries] are Maven coordinates in classpath order; [librariesRoot] is the `libraries/` directory
+ * they were written under. Jar paths are derived from the two, so an interrupted run cannot leave a
+ * transaction pointing at a path that no longer matches its coordinate.
+ */
+data class LoaderInstallRecord(
+    val previousVersion: String,
+    val installedVersion: String,
+    val libraries: List<String>,
+    val librariesRoot: java.nio.file.Path,
+    val mainClass: String? = null,
+)

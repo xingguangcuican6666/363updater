@@ -219,59 +219,77 @@ public final class CurrentJvmCommand {
     }
 
     /**
-     * Replaces whole classpath entries, matched by absolute path.
+     * The classpath entries this JVM was started with, in order; empty when it had no classpath.
      *
-     * Used when the updater has installed a different version of a library the current command line
-     * pins by path, such as the Fabric loader jars after a loader update: relaunching the captured
-     * line unchanged would load the old jar the running game already has open. Entries that do not
-     * appear in the map are kept byte for byte, and every replacement path must be an existing
-     * regular file so a rewrite cannot point the next JVM at a jar that is not there.
+     * A relaunch never has to understand how the launcher built that classpath: the JVM argv is the
+     * one launcher-neutral source for it, and everything else about the process is equally available
+     * through [executable], [workingDirectory] and [arguments].
      */
-    public CurrentJvmCommand withReplacedJarPaths(Map<String, String> replacementsByAbsolutePath) {
-        if (replacementsByAbsolutePath == null || replacementsByAbsolutePath.isEmpty()) {
-            throw new IllegalArgumentException("Missing jar path replacements");
-        }
-        if (replacementsByAbsolutePath.size() > MAX_ARGUMENTS) throw new IllegalArgumentException("Too many jar path replacements");
-        Map<String, String> validated = new java.util.LinkedHashMap<>(replacementsByAbsolutePath.size());
-        for (Map.Entry<String, String> entry : replacementsByAbsolutePath.entrySet()) {
-            String from = entry.getKey();
-            String to = entry.getValue();
-            if (from == null || from.isEmpty() || from.indexOf('\0') >= 0) {
-                throw new IllegalArgumentException("Invalid jar path to replace");
-            }
-            if (to == null || to.isEmpty() || to.indexOf('\0') >= 0) {
-                throw new IllegalArgumentException("Invalid replacement jar path");
-            }
-            Path target = Path.of(to);
-            if (!target.isAbsolute()) throw new IllegalArgumentException("Replacement jar path must be absolute: " + to);
-            if (!Files.isRegularFile(target) || Files.isSymbolicLink(target)) {
-                throw new IllegalArgumentException("Replacement jar is not a regular file: " + to);
-            }
-            validated.put(from, to);
-        }
-
-        List<String> next = new ArrayList<>(this.arguments.size());
+    public List<String> classpathEntries() {
         int mainIndex = locateMainIndex(this.arguments);
+        for (int index = 0; index < mainIndex; index++) {
+            String argument = this.arguments.get(index);
+            String option = classpathOption(argument);
+            if (option == null) continue;
+            String value;
+            if (argument.length() > option.length()) {
+                value = argument.substring(option.length() + 1);
+            } else {
+                value = index + 1 < mainIndex ? this.arguments.get(index + 1) : "";
+            }
+            List<String> entries = new ArrayList<>();
+            for (String entry : value.split(java.util.regex.Pattern.quote(File.pathSeparator), -1)) {
+                if (!entry.isEmpty()) entries.add(entry);
+            }
+            return List.copyOf(entries);
+        }
+        return List.of();
+    }
+
+    /**
+     * Replaces the classpath with [entries], keeping every other argument byte for byte.
+     *
+     * This is how a relaunch puts a different loader on the classpath: rebuild the one option the JVM
+     * consumes, and replay the rest of the captured line unchanged. Application arguments after the
+     * launch target are never treated as a classpath, so a game argument that looks like one cannot be
+     * rewritten. When the captured line had no classpath the entries are inserted before the launch
+     * target.
+     */
+    public CurrentJvmCommand withClasspath(List<String> entries) {
+        if (entries == null || entries.isEmpty()) throw new IllegalArgumentException("Missing classpath entries");
+        if (entries.size() > MAX_ARGUMENTS) throw new IllegalArgumentException("Too many classpath entries");
+        for (String entry : entries) {
+            if (entry == null || entry.isEmpty() || entry.indexOf('\0') >= 0) {
+                throw new IllegalArgumentException("Invalid classpath entry");
+            }
+            if (entry.indexOf(File.pathSeparatorChar) >= 0) {
+                throw new IllegalArgumentException("Classpath entries must not contain the path separator");
+            }
+        }
+        String value = String.join(File.pathSeparator, entries);
+
+        int originalMainIndex = locateMainIndex(this.arguments);
+        List<String> next = new ArrayList<>(this.arguments.size() + 2);
+        boolean replaced = false;
+        int mainIndex = originalMainIndex;
         for (int index = 0; index < this.arguments.size(); index++) {
             String argument = this.arguments.get(index);
-            // Only JVM options carry a classpath; application arguments are copied verbatim so a game
-            // argument that happens to look like an option can never be rewritten.
-            String option = index < mainIndex ? classpathOption(argument) : null;
+            String option = index < originalMainIndex ? classpathOption(argument) : null;
             if (option == null) {
                 next.add(argument);
                 continue;
             }
-            String value;
             boolean inline = argument.length() > option.length();
-            if (inline) {
-                value = argument.substring(option.length() + 1);
-            } else {
-                if (index + 1 >= this.arguments.size()) throw new IllegalStateException("Incomplete classpath option");
-                value = this.arguments.get(++index);
-            }
-            String rewritten = rewriteClasspath(value, validated);
-            next.add(inline ? option + "=" + rewritten : option);
-            if (!inline) next.add(rewritten);
+            if (!inline && index + 1 < originalMainIndex) index++; // drop the value that followed
+            if (replaced) continue;
+            next.add(inline ? option + "=" + value : option);
+            if (!inline) next.add(value);
+            replaced = true;
+        }
+        if (!replaced) {
+            mainIndex = locateMainIndex(next);
+            next.add(mainIndex, "-cp");
+            next.add(mainIndex + 1, value);
         }
         return new CurrentJvmCommand(this.executable, next, this.workingDirectory);
     }
@@ -285,15 +303,14 @@ public final class CurrentJvmCommand {
         return null;
     }
 
-    private static String rewriteClasspath(String value, Map<String, String> replacements) {
-        if (value.indexOf(File.pathSeparatorChar) < 0 && !replacements.containsKey(value)) return value;
-        String[] entries = value.split(java.util.regex.Pattern.quote(File.pathSeparator), -1);
-        StringBuilder rewritten = new StringBuilder(value.length() + 64);
-        for (int index = 0; index < entries.length; index++) {
-            if (index > 0) rewritten.append(File.pathSeparatorChar);
-            rewritten.append(replacements.getOrDefault(entries[index], entries[index]));
+    /** True when [arguments] pass a classpath between the JVM options and the launch target. */
+    public static boolean hasClasspath(List<String> arguments) {
+        if (arguments == null) return false;
+        int mainIndex = locateMainIndex(arguments);
+        for (int index = 0; index < mainIndex; index++) {
+            if (classpathOption(arguments.get(index)) != null) return true;
         }
-        return rewritten.toString();
+        return false;
     }
 
     public CurrentJvmCommand withoutUpdaterHandoffArguments() {

@@ -302,108 +302,131 @@ class HandoffInfrastructureTest {
     }
 
     @Test
-    fun `replaces classpath jars by absolute path and leaves application arguments alone`() {
-        val workingDirectory = Files.createTempDirectory("363updater-classpath")
-        val old = Files.createDirectories(workingDirectory.resolve("libraries/old")).resolve("lib.jar")
-        Files.writeString(old, "old")
-        val replacement = Files.createDirectories(workingDirectory.resolve("libraries/new")).resolve("lib.jar")
-        Files.writeString(replacement, "new")
+    fun `classpathEntries reads the captured classpath and not application arguments`() {
         val separator = java.io.File.pathSeparator
         val command = CurrentJvmCommand(
             "/runtime/bin/java",
             listOf(
                 "-Xmx2g",
                 "-cp",
-                "$old$separator${workingDirectory.resolve("game.jar")}",
+                "/a.jar$separator/b.jar",
                 "example.Main",
                 "--version",
                 "test update",
                 "-cp",
                 "application-argument-not-a-classpath",
             ),
-            workingDirectory,
+            Files.createTempDirectory("363updater-classpath"),
         )
 
-        val updated = command.withReplacedJarPaths(mapOf(old.toString() to replacement.toString()))
+        assertEquals(listOf("/a.jar", "/b.jar"), command.classpathEntries())
+        assertEquals(3, CurrentJvmCommand.locateMainIndex(command.arguments()))
+        assertTrue(CurrentJvmCommand.hasClasspath(command.arguments()))
+    }
+
+    @Test
+    fun `withClasspath replaces only the JVM classpath option`() {
+        val separator = java.io.File.pathSeparator
+        val command = CurrentJvmCommand(
+            "/runtime/bin/java",
+            listOf("-Xmx2g", "-classpath", "/old.jar", "example.Main", "--gameDir", "/game", "-cp", "game-arg"),
+            Files.createTempDirectory("363updater-classpath"),
+        )
+
+        val updated = command.withClasspath(listOf("/new.jar", "/also-new.jar"))
 
         val arguments = updated.arguments()
-        val classpathIndex = arguments.indexOf("-cp")
-        val rewritten = arguments[classpathIndex + 1].split(separator)
-        assertEquals(replacement.toString(), rewritten[0], "the pinned loader jar is rewritten")
-        assertEquals(workingDirectory.resolve("game.jar").toString(), rewritten[1], "other entries are kept")
+        assertEquals("/new.jar$separator/also-new.jar", arguments[arguments.indexOf("-classpath") + 1])
+        assertEquals(3, CurrentJvmCommand.locateMainIndex(arguments), "the main class keeps its position")
+        assertEquals(listOf("--gameDir", "/game", "-cp", "game-arg"), arguments.takeLast(4), "application arguments are untouched")
+        assertFailsWith<IllegalArgumentException> { command.withClasspath(emptyList()) }
+        assertFailsWith<IllegalArgumentException> { command.withClasspath(listOf("/a$separator/b")) }
+    }
+
+    @Test
+    fun `withClasspath inserts a classpath when the captured line had none`() {
+        val command = CurrentJvmCommand(
+            "/runtime/bin/java",
+            listOf("-Xmx2g", "example.Main", "--gameDir", "/game"),
+            Files.createTempDirectory("363updater-classpath"),
+        )
+
+        val updated = command.withClasspath(listOf("/new.jar"))
+
+        val arguments = updated.arguments()
+        assertEquals("/new.jar", arguments[arguments.indexOf("-cp") + 1])
         assertEquals(3, CurrentJvmCommand.locateMainIndex(arguments))
-        // The `-cp` after the main class is an application argument and must not be touched.
-        assertTrue("application-argument-not-a-classpath" in arguments.drop(3))
+        assertFalse(CurrentJvmCommand.hasClasspath(listOf("-Xmx2g", "example.Main")))
     }
 
     @Test
-    fun `refuses a replacement jar that is not a regular file`() {
-        val workingDirectory = Files.createTempDirectory("363updater-classpath")
-        val old = Files.createDirectories(workingDirectory.resolve("libraries")).resolve("lib.jar")
-        Files.writeString(old, "old")
-        val command = CurrentJvmCommand("/runtime/bin/java", listOf("-cp", old.toString(), "example.Main"), workingDirectory)
-        val missing = workingDirectory.resolve("libraries").resolve("absent.jar")
-
-        assertFailsWith<IllegalArgumentException> { command.withReplacedJarPaths(mapOf(old.toString() to missing.toString())) }
-        assertFailsWith<IllegalArgumentException> { command.withReplacedJarPaths(emptyMap()) }
-    }
-
-    @Test
-    fun `loader relaunch rewrites the captured classpath after a loader update`() {
+    fun `loader relaunch rebuilds the classpath from the recorded install`() {
         val root = Files.createTempDirectory("363updater-relaunch")
-        val gameDir = Files.createDirectories(root.resolve("versions").resolve("test update"))
         val libraries = Files.createDirectories(root.resolve("libraries"))
-        // The instance profile as FabricProfilePatcher leaves it after installing 0.19.5.
-        Files.writeString(gameDir.resolve("test update.json"),
-            """{"id":"test update","libraries":[{"name":"net.fabricmc:fabric-loader:0.19.5"}]}""")
-        val oldJar = Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.3"))
+        val oldLoader = Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.3"))
             .resolve("fabric-loader-0.19.3.jar")
-        Files.writeString(oldJar, "old")
-        val newJar = Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.5"))
+        Files.writeString(oldLoader, "old")
+        val newLoader = Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.5"))
             .resolve("fabric-loader-0.19.5.jar")
-        Files.writeString(newJar, "new")
+        Files.writeString(newLoader, "new")
+        val gameJar = root.resolve("versions/test update/test update.jar")
+        Files.createDirectories(gameJar.parent)
+        Files.writeString(gameJar, "client")
 
         val command = CurrentJvmCommand(
             "/runtime/bin/java",
-            listOf("-cp", oldJar.toString(), "net.fabricmc.loader.impl.launch.knot.KnotClient", "--version", "test update", "--gameDir", gameDir.toString()),
-            gameDir,
+            listOf("-cp", "$oldLoader${java.io.File.pathSeparator}$gameJar", "net.fabricmc.loader.impl.launch.knot.KnotClient", "--version", "test update"),
+            root,
         )
-        val transaction = loaderTransaction(root, "0.19.3", "0.19.5")
+        val transaction = loaderTransaction(
+            root,
+            previous = "0.19.3",
+            installed = "0.19.5",
+            libraries = listOf("net.fabricmc:fabric-loader:0.19.5"),
+            librariesRoot = libraries,
+        )
 
-        val prepared = LoaderRelaunchStrategy.prepare(command, transaction, gameDir)
+        val prepared = LoaderRelaunchStrategy.prepare(command, transaction)
 
-        assertEquals(newJar.toString(), prepared.arguments()[prepared.arguments().indexOf("-cp") + 1])
+        val classpath = prepared.arguments()[prepared.arguments().indexOf("-cp") + 1].split(java.io.File.pathSeparator)
+        assertEquals(listOf(newLoader.toString(), gameJar.toString()), classpath, "loader jar swapped, game jar kept")
 
-        // Without a loader change the captured command line is replayed unchanged.
-        val untouched = LoaderRelaunchStrategy.prepare(command, loaderTransaction(root, "", ""), gameDir)
+        // A transaction that installed nothing is replayed unchanged.
+        val untouched = LoaderRelaunchStrategy.prepare(command, loaderTransaction(root, "", "", emptyList(), libraries))
         assertEquals(command.arguments(), untouched.arguments())
     }
 
     @Test
-    fun `loader relaunch refuses to start with a declared jar missing on disk`() {
+    fun `loader relaunch refuses when a recorded jar is missing`() {
         val root = Files.createTempDirectory("363updater-relaunch")
-        val gameDir = Files.createDirectories(root.resolve("versions").resolve("test update"))
         val libraries = Files.createDirectories(root.resolve("libraries"))
-        Files.writeString(gameDir.resolve("test update.json"),
-            """{"id":"test update","libraries":[{"name":"net.fabricmc:fabric-loader:0.19.5"}]}""")
-        val oldJar = Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.3"))
-            .resolve("fabric-loader-0.19.3.jar")
-        Files.writeString(oldJar, "old")
-
+        Files.createDirectories(libraries.resolve("net/fabricmc/fabric-loader/0.19.5"))
         val command = CurrentJvmCommand(
             "/runtime/bin/java",
-            listOf("-cp", oldJar.toString(), "net.fabricmc.loader.impl.launch.knot.KnotClient", "--version", "test update"),
-            gameDir,
+            listOf("-cp", "/old.jar", "net.fabricmc.loader.impl.launch.knot.KnotClient"),
+            root,
         )
-        val transaction = loaderTransaction(root, "0.19.3", "0.19.5")
+        val transaction = loaderTransaction(
+            root,
+            previous = "0.19.3",
+            installed = "0.19.5",
+            libraries = listOf("net.fabricmc:fabric-loader:0.19.5"),
+            librariesRoot = libraries,
+        )
 
         val exception = assertFailsWith<LoaderRelaunchException> {
-            LoaderRelaunchStrategy.prepare(command, transaction, gameDir)
+            LoaderRelaunchStrategy.prepare(command, transaction)
         }
         assertTrue(exception.message.orEmpty().contains("missing on disk"))
     }
 
-    private fun loaderTransaction(root: Path, previous: String, installed: String): PreparedTransaction {
+    private fun loaderTransaction(
+        root: Path,
+        previous: String,
+        installed: String,
+        libraries: List<String> = emptyList(),
+        librariesRoot: Path = root,
+    ): PreparedTransaction {
         val path = Files.createDirectories(root.resolve(".cache").resolve("updater363").resolve("transactions").resolve(UUID.randomUUID().toString()))
         return PreparedTransaction(
             path,
@@ -422,6 +445,8 @@ class HandoffInfrastructureTest {
                 configChanges = emptyList(),
                 loaderPreviousVersion = previous,
                 loaderInstalledVersion = installed,
+                loaderLibraries = libraries,
+                loaderLibrariesRoot = librariesRoot.toString(),
             ),
         )
     }

@@ -12,6 +12,7 @@ import com.github.fanziyun.updater.reload.HotReloadService
 import com.github.fanziyun.updater.reload.ReloadReport
 import com.github.fanziyun.updater.util.AtomicFiles
 import com.github.fanziyun.updater.util.PathSafety
+import com.github.fanziyun.updater.transaction.LoaderInstallRecord
 import com.github.fanziyun.updater.transaction.UpdateTransactionManager
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -43,13 +44,13 @@ object UpdateExecutor {
         // mods need the newer loader cannot boot on the old one, so committing the pack without it
         // leaves the instance unstartable. Updating the loader and then failing leaves a bootable
         // instance on the newer loader, which loaders tolerate.
-        val loaderUpdate = updateFabricLoader(plan, config, timeoutMs(config))
+        val loaderInstall = updateFabricLoader(plan, config, timeoutMs(config))
         if (plan.requiresRestart) {
             UpdateProgressTracker.phase(UpdatePhase.PREPARE, plan.targetVersion)
             val transaction = UpdateTransactionManager(
                 timeoutMs = timeoutMs(config),
                 listener = UpdateProgressTracker.listener,
-            ).prepare(plan, config, loaderUpdate)
+            ).prepare(plan, config, loaderInstall)
             UpdateProgressTracker.done(transaction.id)
             return ApplyResult(
                 backup = null,
@@ -57,7 +58,7 @@ object UpdateExecutor {
                 reloadFailures = emptyList(),
                 transactionId = transaction.id,
                 requiresRestart = true,
-                loaderUpdate = loaderUpdate,
+                loaderUpdate = loaderInstall?.let { LoaderUpdate(it.previousVersion, it.installedVersion) },
             )
         }
         UpdateProgressTracker.phase(UpdatePhase.BACKUP)
@@ -106,22 +107,23 @@ object UpdateExecutor {
             backup = backup,
             reloaded = reload.attempted && reload.failures.isEmpty(),
             reloadFailures = reload.failures,
-            loaderUpdate = loaderUpdate,
+            loaderUpdate = loaderInstall?.let { LoaderUpdate(it.previousVersion, it.installedVersion) },
         )
     }
 
     private fun timeoutMs(config: UpdaterConfig): Int = config.networkTimeoutSeconds.coerceIn(5, 120) * 1_000
 
     /**
-     * Installs the Fabric loader version the target mrpack declares, and returns what changed.
+     * Installs the loader version the target mrpack declares, and returns what to record.
      *
      * This runs before any pack file is written: a target pack whose mods require the newer loader
      * cannot boot on the old one, so committing the pack without the loader would leave the instance
      * unstartable, while updating the loader first leaves it bootable either way. A failure is fatal
      * when the option is on for the same reason — the caller must not commit a pack it cannot run.
      *
-     * The version id comes from the running process command line, because an isolated launcher
-     * instance keeps its profile beside the game directory and names it after the instance.
+     * Only two facts come from the running process: the classpath it resolved (which names the
+     * `libraries/` root to install into) and its loader version. Nothing launcher-specific is read or
+     * written; the relaunch rebuilds its classpath from those same argv-derived facts.
      */
     internal fun updateFabricLoader(
         plan: UpdatePlan,
@@ -130,41 +132,45 @@ object UpdateExecutor {
         gameDir: Path = Platform.INSTANCE.gameDir,
         loaderId: String = Platform.INSTANCE.loaderId,
         currentLoaderVersion: String = Platform.INSTANCE.loaderVersion,
-        versionId: String? = currentVersionId(),
-    ): LoaderUpdate? {
+        classpath: List<String> = currentClasspath(),
+    ): LoaderInstallRecord? {
         if (!config.updateFabricLoader || loaderId != "fabric") return null
         val target = plan.targetLoaderVersion
         if (!FabricLoaderUpdater.shouldUpdate(currentLoaderVersion, target)) return null
         val minecraftVersion = plan.minecraftVersion.ifBlank {
             config.minecraftVersion.trim().ifBlank { Platform.INSTANCE.minecraftVersion }
         }
-        val installed = try {
-            FabricLoaderUpdater.update(
-                gameDir = gameDir,
+        val librariesRoot = FabricLoaderUpdater.resolveLibrariesRoot(gameDir, classpath)
+        val install = try {
+            FabricLoaderUpdater.install(
                 minecraftVersion = minecraftVersion,
                 currentLoaderVersion = currentLoaderVersion,
                 targetLoaderVersion = target,
+                librariesRoot = librariesRoot,
                 timeoutMs = timeoutMs,
                 listener = UpdateProgressTracker.listener,
-                versionId = versionId,
             )
         } catch (exception: Exception) {
             UpdateProgressTracker.failed(exception.message ?: exception.javaClass.simpleName)
             throw IllegalStateException(
-                "Unable to update Fabric loader to $target; the update was not applied",
+                "Unable to install Fabric loader $target into $librariesRoot; the update was not applied",
                 exception,
             )
-        }
-        return installed?.let {
-            Updater.LOGGER.info("Fabric loader {} replaced {}", it, currentLoaderVersion)
-            LoaderUpdate(currentLoaderVersion, it)
-        }
+        } ?: return null
+        Updater.LOGGER.info("Fabric loader {} replaced {}", install.resolveLoaderVersion(), currentLoaderVersion)
+        return LoaderInstallRecord(
+            previousVersion = currentLoaderVersion,
+            installedVersion = install.resolveLoaderVersion().orEmpty(),
+            libraries = install.libraries.map { it.name },
+            librariesRoot = install.librariesRoot,
+            mainClass = install.mainClass,
+        )
     }
 
-    /** The `--version` id the launcher passed to this game, or null when it is not on the command line. */
-    internal fun currentVersionId(): String? = runCatching {
-        FabricLoaderUpdater.versionIdFromArguments(CurrentJvmCommand.capture().arguments())
-    }.getOrNull()
+    /** The classpath the running JVM was started with; the only launcher-neutral source for it. */
+    internal fun currentClasspath(): List<String> = runCatching {
+        CurrentJvmCommand.capture().classpathEntries()
+    }.getOrDefault(emptyList())
 
     fun rollbackLatest() {
         BackupManager.latest()?.let(BackupManager::restore)

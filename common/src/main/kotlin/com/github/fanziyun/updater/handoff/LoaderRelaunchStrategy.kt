@@ -1,74 +1,74 @@
 package com.github.fanziyun.updater.handoff
 
 import com.github.fanziyun.updater.Updater
-import com.github.fanziyun.updater.data.FabricLoaderUpdater
-import com.github.fanziyun.updater.data.LoaderLibraryRewrite
-import com.github.fanziyun.updater.platform.Platform
-import com.github.fanziyun.updater.transaction.PreparedTransaction
+import com.github.fanziyun.updater.data.FabricLoaderInstall
+import com.github.fanziyun.updater.data.LoaderLibrary
+import com.github.fanziyun.updater.data.LoaderLibraryPlanner
 import java.nio.file.Path
 
-class LoaderRelaunchException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)
-
 /**
- * Makes an in-process relaunch boot the loader a transaction installed.
+ * Rebuilds the relaunch command line so it boots the loader a transaction installed.
  *
- * Both relaunch paths rebuild the game process from the command line the launcher started this game
- * with. That command line pins every library jar by absolute path, including the loader, so replaying
- * it unchanged would start the new mods on the old loader and fail dependency resolution. Reading the
- * command line is only the first step: the loader jars in it are rewritten to the ones the patched
- * profile declares, which is what makes the relaunch consistent with a cold launcher start.
+ * The updater never models a launcher. A launcher's only lasting contribution to a running game is
+ * the JVM argv, so that is read for the facts the relaunch needs — executable, working directory,
+ * classpath — and everything else is rebuilt here:
  *
- * When no loader was replaced this is the identity function. When the profile declares a loader jar
- * that is not on disk the relaunch is refused rather than started with a stale jar, because a boot on
- * the wrong loader version is the failure this exists to prevent.
+ * - the classpath is replaced with one that carries the installed loader jars in place of the old
+ *   ones, keeping every non-loader entry (the game jar, user paths) where it was
+ * - application arguments, JVM flags and the main class are replayed byte for byte, so launcher
+ *   options like `-Xmx`, `-javaagent` or custom properties survive untouched
+ *
+ * When no loader was installed this is the identity function. When the transaction recorded an
+ * install but the jars are gone, the relaunch is refused rather than started on a stale loader.
  */
 object LoaderRelaunchStrategy {
     /**
-     * Returns [command] with the loader jar paths swapped for the installed ones.
+     * Returns [command] ready to start the installed loader.
      *
-     * @throws LoaderRelaunchException when the rewritten classpath would still carry a loader jar the
-     * profile no longer declares, or the rewrite itself fails
+     * @throws LoaderRelaunchException when the recorded loader jars are missing from disk
      */
-    fun prepare(
-        command: CurrentJvmCommand,
-        transaction: PreparedTransaction,
-        gameDir: Path = Platform.INSTANCE.gameDir,
-    ): CurrentJvmCommand {
-        if (!loaderChanged(transaction)) return command
-        val plan = plan(command, transaction, gameDir)
-        plan.unresolved.firstOrNull()?.let { stale ->
-            throw LoaderRelaunchException(
-                "Loader library declared by the instance profile is missing on disk: $stale",
-            )
-        }
-        if (plan.replacements.isEmpty()) {
-            Updater.LOGGER.info("Relaunch keeps its captured loader jars; the profile already declares them")
-            return command
-        }
-        return command.withReplacedJarPaths(plan.replacements)
+    fun prepare(command: CurrentJvmCommand, transaction: com.github.fanziyun.updater.transaction.PreparedTransaction): CurrentJvmCommand {
+        val install = loadInstall(transaction) ?: return command
+        val captured = command.classpathEntries()
+        val relaunch = LoaderLibraryPlanner.relaunchClasspath(captured, install)
+        if (relaunch == captured) return command
+        return command.withClasspath(relaunch)
     }
 
-    /** True when [transaction] replaced the loader, so a relaunch has to load different jars. */
-    fun loaderChanged(transaction: PreparedTransaction): Boolean =
+    /** True when [transaction] recorded a loader install, so a relaunch has to load different jars. */
+    fun loaderChanged(transaction: com.github.fanziyun.updater.transaction.PreparedTransaction): Boolean =
         transaction.record.loaderInstalledVersion.isNotBlank()
 
     /**
-     * Resolves the rewrite without applying it. Split out so the capability report can say whether a
-     * relaunch is possible at all, using the same resolution the relaunch itself will use.
+     * The install a transaction recorded, re-resolved against the filesystem.
+     *
+     * The transaction stores the Maven coordinates it installed and the `libraries/` root it used, so
+     * the relaunch recomputes jar paths from coordinates instead of trusting stored paths. Missing
+     * jars are an error: a relaunch on the old loader version fails dependency resolution exactly the
+     * way this update exists to prevent.
      */
-    fun plan(
-        command: CurrentJvmCommand,
-        transaction: PreparedTransaction,
-        gameDir: Path = Platform.INSTANCE.gameDir,
-    ): LoaderLibraryRewrite.Plan {
-        val versionId = FabricLoaderUpdater.versionIdFromArguments(command.arguments())
-        return runCatching {
-            FabricLoaderUpdater.classpathPlan(gameDir, command.arguments(), versionId)
-        }.getOrElse {
-            throw LoaderRelaunchException(
-                "Unable to resolve the loader libraries for a relaunch",
-                it,
-            )
+    fun loadInstall(transaction: com.github.fanziyun.updater.transaction.PreparedTransaction): FabricLoaderInstall? {
+        val record = transaction.record
+        if (record.loaderInstalledVersion.isBlank() || record.loaderLibraries.isEmpty()) return null
+        val root = Path.of(record.loaderLibrariesRoot).takeIf { it.isAbsolute }
+            ?: throw LoaderRelaunchException("The updater transaction has no usable loader libraries root")
+        val libraries = record.loaderLibraries.mapNotNull { coordinate ->
+            runCatching { LoaderLibrary(coordinate, null, null) }.getOrNull()
         }
+        if (libraries.isEmpty()) {
+            throw LoaderRelaunchException("The updater transaction recorded no usable loader libraries")
+        }
+        val jars = libraries.map { it.jarPath(root) }
+        jars.firstOrNull { !java.nio.file.Files.isRegularFile(it) }?.let { missing ->
+            throw LoaderRelaunchException("Loader library is missing on disk: $missing")
+        }
+        Updater.LOGGER.info(
+            "Relaunch will use fabric-loader {} from {}",
+            record.loaderInstalledVersion,
+            root,
+        )
+        return FabricLoaderInstall(libraries, jars, null, root)
     }
 }
+
+class LoaderRelaunchException(message: String, cause: Throwable? = null) : IllegalStateException(message, cause)

@@ -74,17 +74,17 @@ object RestartCoordinator {
         } == true
         val command = runCatching { CurrentJvmCommand.capture() }
         val commandError = command.exceptionOrNull()?.message
-        // A loader update rewrites the loader jar paths in the captured command line before relaunch,
-        // so an in-process restart stays valid; only a rewrite that cannot be resolved (a loader jar
-        // the patched profile declares is missing on disk) has to fall back to the launcher. Resolved
-        // once here and reused by the staged-mods strategy so the two never disagree.
+        // A loader install is applied by rebuilding the classpath from the captured argv, so an
+        // in-process restart stays valid; only a recorded install whose jars are gone has to fall
+        // back to the launcher. Resolved once and reused by the staged-mods strategy so the two
+        // never disagree.
         val relaunch = if (command.isSuccess) {
             runCatching { LoaderRelaunchStrategy.prepare(command.getOrThrow(), transaction) }
         } else null
         val loaderRewriteError = relaunch?.exceptionOrNull()?.message
         val loaderReason = if (loaderRewriteError != null) {
-            "The launcher must restart this instance to load fabric-loader " +
-                transaction.record.loaderInstalledVersion
+            "The updater could not apply fabric-loader " +
+                transaction.record.loaderInstalledVersion + " to the relaunch"
         } else ""
         val automaticAvailable = helperAvailable && commandError == null && loaderRewriteError == null
         val supported = FastRestartPlatformPolicy.supportsProfile(

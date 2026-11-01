@@ -172,12 +172,61 @@ class LoaderLibraryPlannerTest {
 
             val relaunch = LoaderLibraryPlanner.relaunchClasspath(captured, install)
 
-            // The loader block lands where the first loader jar was, and the non-loader entries keep
-            // their relative order on either side of it.
-            assertEquals(installed.map { it.toString() }, relaunch.take(2))
-            assertEquals(captured[3], relaunch[2], "game jar keeps its position after the loader block")
-            assertEquals("/opt/extra/user.jar", relaunch[3])
-            assertEquals(4, relaunch.size, "the captured loader jars are dropped, not duplicated")
+            // The install lands where the first replaced jar was; the loader jars it supersedes are
+            // dropped; artifacts the install does not provide (intermediary, the game jar, user
+            // paths) keep their content and relative order.
+            assertEquals(
+                listOf(
+                    installed[0].toString(),
+                    installed[1].toString(),
+                    captured[1],
+                    captured[3],
+                    "/opt/extra/user.jar",
+                ),
+                relaunch,
+                "only the replaced artifacts are dropped, and the install goes where the first one was",
+            )
+        } finally {
+            sandbox.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `relaunchClasspath keeps unrelated libraries that also live under the libraries root`() {
+        // A real launch resolves hundreds of Maven jars from the same root (log4j, slf4j, guava,
+        // lwjgl, …). Only the artifacts the new loader provides may be replaced; dropping the rest
+        // leaves the game without log4j/slf4j and it dies with NoClassDefFoundError before any mod runs.
+        val sandbox = Files.createTempDirectory("363-planner")
+        try {
+            val root = sandbox.resolve("libraries")
+            val installed = listOf(loader19_5).map { library ->
+                library.jarPath(root).also { jar ->
+                    Files.createDirectories(jar.parent)
+                    Files.writeString(jar, "jar")
+                }
+            }
+            val install = FabricLoaderInstall(listOf(loader19_5), installed, null, root)
+            val log4j = root.resolve("org/apache/logging/log4j/log4j-api/2.25.2/log4j-api-2.25.2.jar")
+            val slf4j = root.resolve("org/slf4j/slf4j-api/2.0.17/slf4j-api-2.0.17.jar")
+            val guava = root.resolve("com/google/guava/guava/33.5.0-jre/guava-33.5.0-jre.jar")
+            listOf(log4j, slf4j, guava).forEach { jar ->
+                Files.createDirectories(jar.parent)
+                Files.writeString(jar, "jar")
+            }
+            val captured = listOf(
+                log4j.toString(),
+                root.resolve("net/fabricmc/fabric-loader/0.19.3/fabric-loader-0.19.3.jar").toString(),
+                slf4j.toString(),
+                guava.toString(),
+            )
+
+            val relaunch = LoaderLibraryPlanner.relaunchClasspath(captured, install)
+
+            assertEquals(
+                listOf(log4j.toString(), installed[0].toString(), slf4j.toString(), guava.toString()),
+                relaunch,
+                "unrelated libraries stay in place; only the loader jar is swapped",
+            )
         } finally {
             sandbox.toFile().deleteRecursively()
         }

@@ -406,26 +406,39 @@ data class FabricLoaderInstall(
  * paths — are never reordered or dropped.
  */
 object LoaderLibraryPlanner {
-    /** The jar paths a relaunch classpath should carry, given the captured one. */
+    /**
+     * The jar paths a relaunch classpath should carry, given the captured one.
+     *
+     * Only the artifacts [install] actually provides are replaced: an entry is dropped when it lives
+     * under the libraries root and its `group:artifact` matches one the new loader declares, and the
+     * installed jars go where the first such entry was. Every other entry survives untouched — the
+     * hundreds of unrelated Maven jars a launch resolves (log4j, slf4j, guava, lwjgl, …) are not the
+     * loader's to remove, and dropping them makes the game fail on `NoClassDefFoundError` before any
+     * mod runs.
+     */
     fun relaunchClasspath(captured: List<String>, install: FabricLoaderInstall): List<String> {
         val root = install.librariesRoot.toAbsolutePath().normalize()
         val installed = install.jars.map { it.toAbsolutePath().normalize().toString() }
         if (captured.isEmpty()) return installed
+        val replaced = install.libraries.map { it.artifact }.toSet()
 
         val result = mutableListOf<String>()
         var inserted = false
         captured.forEach { entry ->
             if (entry.isBlank()) return@forEach
             val path = runCatching { Path.of(entry) }.getOrNull()
-            val isLoaderLibrary = path != null && path.isAbsolute &&
-                path.toAbsolutePath().normalize().startsWith(root) &&
-                LoaderLibrary.fromJarPath(path, root) != null
+            val library = if (path != null && path.isAbsolute && path.toAbsolutePath().normalize().startsWith(root)) {
+                LoaderLibrary.fromJarPath(path, root)
+            } else {
+                null
+            }
+            val isReplaced = library != null && library.artifact in replaced
             when {
-                isLoaderLibrary && !inserted -> {
+                isReplaced && !inserted -> {
                     result += installed
                     inserted = true
                 }
-                isLoaderLibrary -> Unit
+                isReplaced -> Unit
                 else -> result += entry
             }
         }

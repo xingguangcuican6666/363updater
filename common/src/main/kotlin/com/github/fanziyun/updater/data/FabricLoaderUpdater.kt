@@ -192,6 +192,55 @@ object FabricLoaderUpdater {
         return FabricLoaderInstall(libraries, jars, mainClassFor(payload), librariesRoot)
     }
 
+    /**
+     * Point the instance profile at [install] so the next launcher-built start uses the new loader.
+     *
+     * The relaunch the updater performs itself is rebuilt from argv, but a normal start comes from the
+     * launcher reading this profile. Skipping it is what makes an update "work" for one restart and
+     * fail again the moment the player starts the game from the launcher.
+     *
+     * Returns `null` when there is no profile to rewrite (a launch that is not instance-based); the
+     * relaunch still works there, so this is not an error.
+     */
+    fun applyToProfile(
+        gameDir: Path,
+        versionId: String?,
+        install: FabricLoaderInstall,
+        previousVersion: String,
+    ): LoaderProfileRewriter.Result? {
+        val profilePath = LoaderProfileRewriter.findProfile(gameDir, versionId) ?: run {
+            Updater.LOGGER.info(
+                "No instance profile named {} under {}; the loader is applied to relaunches only",
+                versionId ?: "?",
+                gameDir,
+            )
+            return null
+        }
+        val profile = runCatching {
+            JsonParser.parseString(Files.readString(profilePath, Charsets.UTF_8)).asJsonObject
+        }.getOrElse { exception ->
+            throw FabricLoaderUpdateException("Unable to read the launcher profile $profilePath", exception)
+        }
+        val result = LoaderProfileRewriter.rewrite(profile, install, previousVersion)
+        if (result.changed) {
+            LoaderProfileRewriter.write(profilePath, profile)
+            Updater.LOGGER.info(
+                "Updated {} ({} fields) to fabric-loader {}",
+                profilePath,
+                result.edits,
+                install.resolveLoaderVersion(),
+            )
+        } else {
+            Updater.LOGGER.info("{} already names fabric-loader {}", profilePath, install.resolveLoaderVersion())
+        }
+        // The profile is the authority for the next launch, so verify instead of assuming.
+        val applied = LoaderProfileRewriter.loaderVersion(profile)
+        require(applied == install.resolveLoaderVersion()) {
+            "Launcher profile $profilePath still resolves fabric-loader ${applied ?: "?"}"
+        }
+        return result
+    }
+
     private fun downloadLibrary(
         librariesRoot: Path,
         library: LoaderLibrary,

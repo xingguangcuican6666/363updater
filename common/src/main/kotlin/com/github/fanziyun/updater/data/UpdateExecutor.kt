@@ -133,6 +133,7 @@ object UpdateExecutor {
         loaderId: String = Platform.INSTANCE.loaderId,
         currentLoaderVersion: String = Platform.INSTANCE.loaderVersion,
         classpath: List<String> = currentClasspath(),
+        versionId: String? = currentVersionId(),
     ): LoaderInstallRecord? {
         if (!config.updateFabricLoader || loaderId != "fabric") return null
         val target = plan.targetLoaderVersion
@@ -157,6 +158,9 @@ object UpdateExecutor {
                 exception,
             )
         } ?: return null
+        // The relaunch is rebuilt from argv, but the next launcher-built start reads this profile, so
+        // it has to point at the installed libraries too or the game fails again when started normally.
+        FabricLoaderUpdater.applyToProfile(gameDir, versionId, install, currentLoaderVersion)
         Updater.LOGGER.info("Fabric loader {} replaced {}", install.resolveLoaderVersion(), currentLoaderVersion)
         return LoaderInstallRecord(
             previousVersion = currentLoaderVersion,
@@ -171,6 +175,11 @@ object UpdateExecutor {
     internal fun currentClasspath(): List<String> = runCatching {
         CurrentJvmCommand.capture().classpathEntries()
     }.getOrDefault(emptyList())
+
+    /** The `--version` id the launcher passed, which names the instance profile to rewrite. */
+    internal fun currentVersionId(): String? = runCatching {
+        FabricLoaderUpdater.versionIdFromArguments(CurrentJvmCommand.capture().arguments())
+    }.getOrNull()
 
     fun rollbackLatest() {
         BackupManager.latest()?.let(BackupManager::restore)

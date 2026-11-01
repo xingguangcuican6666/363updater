@@ -16,6 +16,7 @@
 - 更新后可尝试资源重载和注册的配置重载器；失败项会提示重启。
 - 点击更新后先进入进度页：显示正在更新的文件、该文件的 `已下载 / 总大小` 与进度条，以及整体的 `已完成 / 总数` 与第二条进度条。下载、备份、写入、暂存和加载器安装各阶段共用同一条上报通道；写入过程中不可退出，失败会留在页面并显示原因。
 - 目标 mrpack 声明了更高的 `fabric-loader` 时，按 Fabric meta 给出的 Maven 坐标把该 loader 需要的库下载到当前 JVM 实际解析的 `libraries/` 目录（从运行中的 classpath 反推，而不是猜实例目录），并校验 SHA-1（`updateFabricLoader`，默认开启，Android 上隐藏）。不跑 Fabric installer，也不改写任何启动器档案：isolated 实例只认自己的 `libraries/` 和启动时捕获的 classpath，installer 写的 `versions/fabric-loader-*` 没人读。
+- 安装完 loader 后还会改写实例档案里的库坐标（Minecraft 启动器格式的 `<实例>/<id>.json`）：这一步不能省——重启只是更新器自己重建的进程，而玩家下一次从启动器正常启动时，启动器读的是这份档案，档案里还钉着旧版本就会再次失败。改写是结构性的：遍历整个 JSON，凡是 `name` 是这个 loader 提供的坐标就替换，含加载器库的块里 `version` 仍是旧版本就跟着更新，其余字段（`patches`、`downloads`、`url`、游戏 jar 等）原样保留，因此不依赖任何特定启动器的布局。
 - 重启时重新构建 JVM 参数而不是照抄：`CurrentJvmCommand` 只提供可执行文件、工作目录和 classpath 这些客观事实，`LoaderLibraryPlanner` 用安装记录里的坐标替换 classpath 中的加载器 jar、保留游戏 jar 和用户路径及其相对顺序，其余参数与主类原样重放。所以 loader 更新后进程内重启依然有效，不需要退回「请用启动器重启」。
 - loader 安装失败会中止本次更新，因为目标包的模组可能需要新 loader，只提交模组会让实例起不来；只有安装记录里的 jar 在磁盘上缺失时才拒绝重启并说明原因。
 - 内置简体中文、繁体中文、英语、日语、韩语、德语、法语、西班牙语、俄语和巴西葡萄牙语。

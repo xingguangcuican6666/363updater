@@ -69,6 +69,9 @@ data class UpdatePlan(
     val requiresRestart: Boolean = false,
     val codeChanges: Boolean = false,
     val targetIndexBytes: ByteArray? = null,
+    /** Loader versions declared by the current/target mrpack `dependencies`, e.g. `fabric-loader`. */
+    val currentLoaderVersion: String = "",
+    val targetLoaderVersion: String = "",
 ) {
     val changedFiles: List<FilePlan> get() = files.filter(FilePlan::changed)
     val displayedFiles: List<FilePlan> get() = files.filter { it.changed() || it.warning != null }
@@ -82,4 +85,17 @@ data class UpdatePlan(
     val configFiles: List<FilePlan> get() = files.filterNot { it.managedMod }
     val protectedFiles: List<FilePlan> get() = files.filter { it.protectedFile }
     val hasConflicts: Boolean get() = conflicts.isNotEmpty() || files.any(FilePlan::hasConflict)
+
+    /**
+     * True when the target package declares a newer Fabric loader than the installed one.
+     *
+     * Gated on the plan's loader because a Forge or NeoForge pack declares its loader version under a
+     * different dependency key, and the updater only knows how to install Fabric; showing those
+     * versions as an upgrade the updater will perform would be wrong.
+     */
+    val loaderUpdateAvailable: Boolean
+        get() = loader.equals("fabric", ignoreCase = true) &&
+            targetLoaderVersion.isNotBlank() &&
+            currentLoaderVersion.isNotBlank() &&
+            com.github.fanziyun.updater.util.SemVer.compare(targetLoaderVersion, currentLoaderVersion) > 0
 }

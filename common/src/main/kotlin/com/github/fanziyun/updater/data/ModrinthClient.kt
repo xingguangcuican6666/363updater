@@ -2,6 +2,7 @@ package com.github.fanziyun.updater.data
 
 import com.github.fanziyun.updater.Updater
 import com.github.fanziyun.updater.BuildInfo
+import com.github.fanziyun.updater.progress.ProgressListener
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
@@ -75,13 +76,15 @@ class ModrinthClient(private val timeoutMs: Int, configuredApiRoot: String = DEF
         return array.map { parseVersion(it.asJsonObject) }
     }
 
-    fun download(version: ModrinthVersion, destination: Path): Path {
+    fun download(version: ModrinthVersion, destination: Path, listener: ProgressListener = ProgressListener.NONE): Path {
         val file = version.primaryFile ?: throw ModrinthException("Modrinth version ${version.number} has no downloadable file")
         if (!file.fileName.endsWith(".mrpack", ignoreCase = true)) {
             throw ModrinthException("Modrinth version ${version.number} has no mrpack file")
         }
         Files.createDirectories(destination.parent)
+        listener.startFile(file.fileName, if (file.size >= 0) file.size else -1L)
         val temporary = destination.resolveSibling(".${destination.fileName}.download")
+        var downloaded = 0L
         try {
             val connection = open(file.url)
             connection.inputStream.use { input ->
@@ -95,7 +98,9 @@ class ModrinthClient(private val timeoutMs: Int, configuredApiRoot: String = DEF
                             total += count
                             if (total > MAX_PACKAGE_BYTES) throw ModrinthException("mrpack is too large")
                             output.write(buffer, 0, count)
+                            listener.fileBytes(total)
                         }
+                        downloaded = total
                     }
                 }
             }
@@ -105,6 +110,7 @@ class ModrinthClient(private val timeoutMs: Int, configuredApiRoot: String = DEF
             } catch (_: java.nio.file.AtomicMoveNotSupportedException) {
                 Files.move(temporary, destination, StandardCopyOption.REPLACE_EXISTING)
             }
+            listener.finishFile(file.fileName, downloaded)
             return destination
         } catch (exception: Exception) {
             Files.deleteIfExists(temporary)

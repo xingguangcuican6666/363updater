@@ -1,8 +1,9 @@
 package com.github.fanziyun.updater.screen
 
 import com.github.fanziyun.updater.UpdaterService
-import com.github.fanziyun.updater.data.ApplyResult
 import com.github.fanziyun.updater.merge.FileAction
+import com.github.fanziyun.updater.progress.ProgressViewModel
+import com.github.fanziyun.updater.progress.UpdateProgressTracker
 import com.github.fanziyun.updater.merge.KeyAction
 import com.github.fanziyun.updater.merge.UpdatePlan
 import net.minecraft.client.gui.GuiGraphics
@@ -51,7 +52,8 @@ class UpdateDiffScreen(
                     plan = result
                     detailLines = buildLines(result)
                     scrollbar.update(detailLines.size * 12, height - 90)
-                    updateButton?.active = !result.hasConflicts && result.changedFiles.isNotEmpty()
+                    updateButton?.active = !result.hasConflicts &&
+                        (result.changedFiles.isNotEmpty() || result.loaderUpdateAvailable)
                     if (applyAfterLoad && !result.codeChanges && !result.hasConflicts) applyUpdate()
                 }
             }
@@ -67,25 +69,15 @@ class UpdateDiffScreen(
             return
         }
         updateButton?.active = false
-        UpdaterService.apply(currentPlan).whenComplete { result, exception ->
-            ClientScreens.execute {
-                if (ClientScreens.current() !== this@UpdateDiffScreen) return@execute
-                if (exception != null) {
-                    error = exception.cause?.message ?: exception.message
-                        ?: Component.translatable("screen.updater363.unknown_error").string
-                    updateButton?.active = true
-                } else {
-                    showResult(result)
-                }
-            }
-        }
-    }
-
-    private fun showResult(result: ApplyResult) {
+        // The progress page owns the apply future; it forwards to the result screen when it finishes.
         val destination = UpdateScreenNavigation.resultParent(parentScreen)
         ClientScreens.set(
-            if (result.requiresRestart) RestartChoiceScreen(destination)
-            else UpdateResultScreen(destination, result.reloadFailures),
+            UpdateProgressScreen(destination, UpdaterService.apply(currentPlan)) { result ->
+                ClientScreens.set(
+                    if (result.requiresRestart) RestartChoiceScreen(destination)
+                    else UpdateResultScreen(destination, result.reloadFailures, loaderUpdate = result.loaderUpdate),
+                )
+            },
         )
     }
 
@@ -121,7 +113,7 @@ class UpdateDiffScreen(
         val heading = title.string
         graphics.drawString(font, heading, (width - font.width(heading)) / 2, 20, 0xFFFFFFFF.toInt())
         when {
-            loading -> renderMessage(graphics, Component.translatable("screen.updater363.loading").string, 0xFFCCCCCC.toInt())
+            loading -> renderPreviewProgress(graphics)
             error != null -> renderMessage(
                 graphics,
                 Component.translatable(
@@ -142,6 +134,26 @@ class UpdateDiffScreen(
             return true
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY)
+    }
+
+
+    /** Preview runs on the shared tracker, so reuse the progress page layout while downloading. */
+    private fun renderPreviewProgress(graphics: GuiGraphics) {
+        val model = ProgressViewModel.of(UpdateProgressTracker.progress)
+        ProgressLayout.draw(object : ProgressCanvas {
+            override val canvasWidth: Int get() = width
+            override val canvasHeight: Int get() = height
+            override fun textWidth(value: String): Int = font.width(value)
+            override fun drawText(value: String, x: Int, y: Int, color: Int) {
+                graphics.drawString(font, value, x, y, color)
+            }
+            override fun fill(x1: Int, y1: Int, x2: Int, y2: Int, color: Int) {
+                graphics.fill(x1, y1, x2, y2, color)
+            }
+        }, model, { key, arg ->
+            if (arg is String && arg.isEmpty()) Component.translatable(key).string
+            else Component.translatable(key, arg).string
+        }, Component.translatable("screen.updater363.progress.title").string)
     }
 
     private fun renderMessage(graphics: GuiGraphics, message: String, color: Int) {
@@ -183,6 +195,11 @@ class UpdateDiffScreen(
             plan.addedKeys,
             plan.removedKeys,
         ).string, 0xFFAAAAAA.toInt()))
+        if (plan.loaderUpdateAvailable) add(RenderLine(Component.translatable(
+            "screen.updater363.diff.summary.loader",
+            plan.currentLoaderVersion,
+            plan.targetLoaderVersion,
+        ).string, 0xFF55AAFF.toInt()))
         add(RenderLine("", 0xFFFFFFFF.toInt()))
         plan.displayedFiles.forEach { file ->
             val marker = if (file.action == FileAction.DELETE) "-" else "~"

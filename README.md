@@ -1,6 +1,6 @@
 # 363Updater
 
-客户端 Minecraft modpack 更新器（当前版本 `0.2.2`）。它从 Modrinth 获取兼容的 `.mrpack`，比较当前包和目标包，并以事务方式更新受管模组、`config/**` 与 `options.txt`。
+客户端 Minecraft modpack 更新器（当前版本 `0.2.3`）。它从 Modrinth 获取兼容的 `.mrpack`，比较当前包和目标包，并以事务方式更新受管模组、`config/**` 与 `options.txt`。
 
 ## 当前实现
 
@@ -14,6 +14,12 @@
 - JSON/JSON5、常见 TOML、properties 和 `options.txt` 支持结构化合并；其他格式仅在本地未修改时替换，或由高级选项明确允许强制替换。
 - 更新前备份整个 `config/` 和 `options.txt`，默认保留最近 3 次。
 - 更新后可尝试资源重载和注册的配置重载器；失败项会提示重启。
+- 点击更新后先进入进度页：显示正在更新的文件、该文件的 `已下载 / 总大小` 与进度条，以及整体的 `已完成 / 总数` 与第二条进度条。下载、备份、写入、暂存和加载器安装各阶段共用同一条上报通道；写入过程中不可退出，失败会留在页面并显示原因。
+- 目标 mrpack 声明了更高的 `fabric-loader` 时，按 Fabric meta 给出的 Maven 坐标把该 loader 需要的库下载到当前 JVM 实际解析的 `libraries/` 目录（从运行中的 classpath 反推，而不是猜实例目录），并校验 SHA-1（`updateFabricLoader`，默认开启，Android 上隐藏）。不跑 Fabric installer，也不改写任何启动器档案：isolated 实例只认自己的 `libraries/` 和启动时捕获的 classpath，installer 写的 `versions/fabric-loader-*` 没人读。
+- 安装完 loader 后还会改写实例档案里的库坐标（Minecraft 启动器格式的 `<实例>/<id>.json`）：这一步不能省——重启只是更新器自己重建的进程，而玩家下一次从启动器正常启动时，启动器读的是这份档案，档案里还钉着旧版本就会再次失败。改写是结构性的：遍历整个 JSON，凡是 `name` 是这个 loader 提供的坐标就替换，含加载器库的块里 `version` 仍是旧版本就跟着更新，其余字段（`patches`、`downloads`、`url`、游戏 jar 等）原样保留，因此不依赖任何特定启动器的布局。
+- 重启时重新构建 JVM 参数而不是照抄：`CurrentJvmCommand` 只提供可执行文件、工作目录和 classpath 这些客观事实，`LoaderLibraryPlanner` 用安装记录里的坐标替换 classpath 中的加载器 jar、保留游戏 jar 和用户路径及其相对顺序，其余参数与主类原样重放。所以 loader 更新后进程内重启依然有效，不需要退回「请用启动器重启」。
+- loader 安装失败会中止本次更新，因为目标包的模组可能需要新 loader，只提交模组会让实例起不来；只有安装记录里的 jar 在磁盘上缺失时才拒绝重启并说明原因。
+- 依赖声明按「能跑起来的最小版本」写，不按编译时用的版本写：Kotlin 相关依赖一律声明为载入器版本，并把 Kotlin 编译的 API 级别钉到 1.9，因此产物引用的标准库符号不会超出老版本 `fabric-language-kotlin` 提供的范围；`fabricloader` 下限同理只写实际用到的 API 所需的版本。
 - 内置简体中文、繁体中文、英语、日语、韩语、德语、法语、西班牙语、俄语和巴西葡萄牙语。
 - 受管模组更新默认关闭；开启后会保留未受整合包管理的用户模组，并在受管文件被本地修改时中止而不是覆盖。
 - 实验性快速重启默认关闭，只能从主菜单启动；在受支持的 Linux/Windows 构建中从暂存模组代际启动全新 JVM，稳定后再交接窗口和提交正式 `mods/`。
@@ -33,12 +39,12 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 
 运行时从平台适配层读取 Minecraft 版本和加载器，然后筛选 Modrinth 版本。当前版本必须能在 Modrinth 中精确找到；找不到时会停止更新，不根据日期猜测基线。
 
-0.2.2 的快速重启矩阵覆盖以下 8 个发行产物：
+0.2.3 的快速重启矩阵覆盖以下 8 个发行产物：
 
 | Minecraft | 加载器 | 产物 |
 |---|---|---|
-| 1.20.1 | Fabric | `fabric/build/libs/363updater-1.20.1-fabric-0.2.2.jar` |
-| 1.20.1 | Forge | `forge/build/libs/363updater-1.20.1-forge-0.2.2.jar` |
+| 1.20.1 | Fabric | `fabric/build/libs/363updater-1.20.1-fabric-0.2.3.jar` |
+| 1.20.1 | Forge | `forge/build/libs/363updater-1.20.1-forge-0.2.3.jar` |
 | 1.21.1 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
 | 26.1.2 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
 | 26.2 | Fabric / NeoForge | `fabric/build/libs`、`neoforge/build/libs` |
@@ -60,9 +66,9 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 
 产物位于：
 
-- Fabric: `fabric/build/libs/363updater-<mc>-fabric-0.2.2.jar`
-- NeoForge: `neoforge/build/libs/363updater-<mc>-neoforge-0.2.2.jar`
-- Forge 1.20.1: `forge/build/libs/363updater-1.20.1-forge-0.2.2.jar`
+- Fabric: `fabric/build/libs/363updater-<mc>-fabric-0.2.3.jar`
+- NeoForge: `neoforge/build/libs/363updater-<mc>-neoforge-0.2.3.jar`
+- Forge 1.20.1: `forge/build/libs/363updater-1.20.1-forge-0.2.3.jar`
 
 26.x/1.21.1 使用根项目的 Gradle 9 构建。Forge 1.20.1 会由根任务自动切换到仓库内的 Gradle 8.8 子构建；如 JDK 17 不在常见系统路径，可设置 `UPDATER_FORGE_JAVA_HOME`。
 
@@ -74,7 +80,7 @@ updater 的业务代码与加载器适配代码分离。发布时为每个 `363c
 ./tools/build_matrix.sh
 ```
 
-当前构建矩阵与 common 单元测试已通过：8 个发行产物、57 个测试均成功。Linux 已完成运行验收；Windows 快速重启代码已纳入矩阵构建，但仍需要在 Windows HMCL 中实际启动并验证窗口交接。
+当前构建矩阵与 common 单元测试已通过：8 个发行产物、96 个测试均成功。Linux 已完成运行验收；Windows 快速重启代码已纳入矩阵构建，但仍需要在 Windows HMCL 中实际启动并验证窗口交接。进度页已通过单元测试、CI 构建和 Linux 实机更新验收；loader 自更新已通过单元测试、CI 构建，并在沙箱中用真实 Fabric meta 与真实 HMCL 实例档案副本验证了改写与库下载，但还没有在实机完整跑过一次「更新后由启动器启动新 loader」。
 
 ## 配置协议
 

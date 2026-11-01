@@ -62,6 +62,10 @@ class UpdaterConfig : ConfigData {
     @ConfigEntry.Category("restart")
     var updateManagedMods: Boolean = false
 
+    @Comment("Download and overwrite-install the Fabric loader version declared by the target mrpack")
+    @ConfigEntry.Category("restart")
+    var updateFabricLoader: Boolean = true
+
     @Comment("Experimental Linux/Windows two-process restart handoff for supported build profiles")
     @ConfigEntry.Category("restart")
     var experimentalFastRestart: Boolean = false

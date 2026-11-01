@@ -158,6 +158,61 @@ class UpdateTransactionManagerTest {
         assertEquals("new-updater", Files.readString(refreshed.helperJar!!))
     }
 
+    @Test
+    fun `records the replaced loader versions so a restart can tell the player to use the launcher`() {
+        val fixture = fixture()
+
+        val librariesRoot = fixture.gameDir.resolve("libraries")
+        Files.createDirectories(librariesRoot.resolve("net/fabricmc/fabric-loader/0.19.5"))
+        val transaction = fixture.manager.prepare(
+            fixture.plan,
+            fixture.config,
+            LoaderInstallRecord(
+                previousVersion = "0.19.3",
+                installedVersion = "0.19.5",
+                libraries = listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"),
+                librariesRoot = librariesRoot,
+                mainClass = "net.fabricmc.loader.impl.launch.knot.KnotClient",
+            ),
+        )
+
+        assertEquals("0.19.3", transaction.record.loaderPreviousVersion)
+        assertEquals("0.19.5", transaction.record.loaderInstalledVersion)
+        assertEquals(listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"), transaction.record.loaderLibraries)
+        assertEquals(librariesRoot.toString(), transaction.record.loaderLibrariesRoot)
+        // The record is what the relaunch re-reads from disk, so it has to survive the roundtrip.
+        val reloaded = fixture.manager.load(transaction.id)
+        assertEquals("0.19.5", reloaded.record.loaderInstalledVersion)
+        assertEquals(listOf("net.fabricmc:fabric-loader:0.19.5", "org.ow2.asm:asm:9.10.1"), reloaded.record.loaderLibraries)
+    }
+
+    @Test
+    fun `leaves loader versions blank when nothing was replaced`() {
+        val fixture = fixture()
+
+        val transaction = fixture.manager.prepare(fixture.plan, fixture.config)
+
+        assertEquals("", transaction.record.loaderPreviousVersion)
+        assertEquals("", transaction.record.loaderInstalledVersion)
+    }
+
+    @Test
+    fun `rejects a transaction log that claims an installed loader without the one it replaced`() {
+        val fixture = fixture()
+        val transaction = fixture.manager.prepare(fixture.plan, fixture.config)
+
+        // Simulate a hand-edited log: only the installed version is set, so the restart screen would
+        // have no previous version to compare against. The load path has to reject it.
+        val logPath = transaction.path.resolve("transaction.json")
+        val record = JsonParser.parseString(Files.readString(logPath)).asJsonObject
+        record.addProperty("loaderInstalledVersion", "0.19.5")
+        record.addProperty("loaderPreviousVersion", "")
+        Files.writeString(logPath, record.toString())
+
+        val exception = assertFailsWith<IllegalArgumentException> { fixture.manager.load(transaction.id) }
+        assertTrue(exception.message.orEmpty().contains("installed loader without the replaced one"))
+    }
+
     private fun fixture(): Fixture {
         val gameDir = Files.createTempDirectory("363updater-transaction")
         val configDir = Files.createDirectories(gameDir.resolve("config"))

@@ -42,6 +42,12 @@ data class RestartCapabilities(
     val automaticAvailable: Boolean,
     val automaticReason: String = "",
     val deferredAvailable: Boolean,
+    /**
+     * True when this transaction replaced the loader, so only the launcher can start the new one.
+     * [loaderInstalledVersion] names it for the message the player needs to read.
+     */
+    val loaderRestartRequired: Boolean = false,
+    val loaderInstalledVersion: String = "",
 )
 
 class RestartSession internal constructor() {
@@ -68,24 +74,37 @@ object RestartCoordinator {
         } == true
         val command = runCatching { CurrentJvmCommand.capture() }
         val commandError = command.exceptionOrNull()?.message
-        val automaticAvailable = helperAvailable && commandError == null
+        // A loader install is applied by rebuilding the classpath from the captured argv, so an
+        // in-process restart stays valid; only a recorded install whose jars are gone has to fall
+        // back to the launcher. Resolved once and reused by the staged-mods strategy so the two
+        // never disagree.
+        val relaunch = if (command.isSuccess) {
+            runCatching { LoaderRelaunchStrategy.prepare(command.getOrThrow(), transaction) }
+        } else null
+        val loaderRewriteError = relaunch?.exceptionOrNull()?.message
+        val loaderReason = if (loaderRewriteError != null) {
+            "The updater could not apply fabric-loader " +
+                transaction.record.loaderInstalledVersion + " to the relaunch"
+        } else ""
+        val automaticAvailable = helperAvailable && commandError == null && loaderRewriteError == null
         val supported = FastRestartPlatformPolicy.supportsProfile(
             BuildInfo.minecraftVersion,
             Platform.INSTANCE.loaderId,
             System.getProperty("os.name", ""),
         )
         val fastStageReady = transaction.record.stage == TransactionStage.PREPARED
-        val fastCommandError = if (helperAvailable && fastStageReady && command.isSuccess) {
+        val fastCommandError = if (helperAvailable && fastStageReady && relaunch?.isSuccess == true) {
             runCatching {
                 StagedModsLaunchStrategy.prepare(
-                    command.getOrThrow(),
+                    relaunch.getOrThrow(),
                     Platform.INSTANCE.loaderId,
                     transaction.generationMods,
                     requireNotNull(transaction.helperJar),
                 )
             }.exceptionOrNull()?.message
-        } else commandError
+        } else commandError ?: loaderRewriteError
         val fastReason = when {
+            loaderRewriteError != null -> loaderReason
             !supported -> "Fast restart is unavailable for this Minecraft, loader, or operating-system profile"
             !fastStageReady -> "Fast restart requires a newly prepared transaction"
             !helperAvailable -> "The copied updater helper JAR is unavailable"
@@ -103,11 +122,14 @@ object RestartCoordinator {
             lowMemory = supported && RestartLaunchPolicy.lowMemory(metrics?.peakCombinedRssBytes ?: 0L),
             automaticAvailable = automaticAvailable,
             automaticReason = when {
+                loaderRewriteError != null -> loaderReason
                 !helperAvailable -> "The copied updater helper JAR is unavailable"
                 commandError != null -> commandError
                 else -> ""
             },
             deferredAvailable = helperAvailable,
+            loaderRestartRequired = loaderRewriteError != null,
+            loaderInstalledVersion = transaction.record.loaderInstalledVersion,
         )
     }
 
@@ -180,9 +202,12 @@ object RestartCoordinator {
                     "Transaction is not ready for restart: ${transaction.record.stage}"
                 }
                 activated = manager.activateConfiguration(transaction)
-                val command = if (relaunch) CurrentJvmCommand.capture().let {
+                // A loader this transaction installed has to replace the jars the captured command
+                // line pins, or the relaunch boots the new mods on the old loader.
+                val captured = CurrentJvmCommand.capture().let {
                     if (HandoffChildSession.active) it.withoutUpdaterHandoffArguments() else it
-                } else null
+                }
+                val command = if (relaunch) LoaderRelaunchStrategy.prepare(captured, transaction) else null
                 val request = HelperLaunchRequest(
                     if (relaunch) HelperLaunchRequest.Mode.NORMAL_AUTOMATIC else HelperLaunchRequest.Mode.NORMAL_DEFERRED,
                     ProcessHandle.current().pid(),

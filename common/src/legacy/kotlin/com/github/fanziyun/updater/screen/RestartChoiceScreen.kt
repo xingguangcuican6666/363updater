@@ -81,15 +81,39 @@ class RestartChoiceScreen(private val parentScreen: Screen?) :
         super.render(graphics, mouseX, mouseY, partialTick)
         val heading = title.string
         graphics.drawString(font, heading, (width - font.width(heading)) / 2, 28, 0xFFFFFFFF.toInt())
-        val message = if (session == null) Component.translatable("screen.updater363.restart.choose").string
-        else Component.translatable(progressKey(requireNotNull(session).progress.stage)).string
+        val caps = capabilities
+        val current = session
+        val message = when {
+            current != null -> Component.translatable(progressKey(current.progress.stage)).string
+            caps?.loaderRestartRequired == true ->
+                Component.translatable(
+                    "screen.updater363.restart.loader_required",
+                    caps.loaderInstalledVersion,
+                ).string
+            caps?.loaderInstalledVersion?.isNotBlank() == true ->
+                Component.translatable(
+                    "screen.updater363.restart.loader_installed",
+                    caps.loaderInstalledVersion,
+                ).string
+            else -> Component.translatable("screen.updater363.restart.choose").string
+        }
         graphics.drawString(font, fit(message, width - 50), 25, 65, 0xFFCCCCCC.toInt())
         error?.let { graphics.drawString(font, fit(it, width - 50), 25, 88, 0xFFFFAA00.toInt()) }
-        if (capabilities?.automaticAvailable == false && session == null) {
-            val reason = RestartReasonText.automaticCapability(capabilities?.automaticReason.orEmpty())
+        if (caps?.loaderRestartRequired == true && current == null) {
+            val reason = Component.translatable("screen.updater363.restart.loader_reason").string
             graphics.drawString(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
-        } else if (UpdaterService.config.experimentalFastRestart && capabilities?.fastAvailable == false && session == null) {
-            val reason = RestartReasonText.fastCapability(capabilities?.fastReason.orEmpty())
+        } else if (caps?.loaderInstalledVersion?.isNotBlank() == true && current == null) {
+            // The relaunch rewrites the loader jars on the classpath, so say what will actually start.
+            val note = Component.translatable(
+                "screen.updater363.restart.loader_relaunch",
+                caps.loaderInstalledVersion,
+            ).string
+            graphics.drawString(font, fit(note, width - 50), 25, 110, 0xFFAAAAAA.toInt())
+        } else if (caps?.automaticAvailable == false && current == null) {
+            val reason = RestartReasonText.automaticCapability(caps?.automaticReason.orEmpty())
+            graphics.drawString(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
+        } else if (UpdaterService.config.experimentalFastRestart && caps?.fastAvailable == false && current == null) {
+            val reason = RestartReasonText.fastCapability(caps?.fastReason.orEmpty())
             graphics.drawString(font, fit(reason, width - 50), 25, 110, 0xFFAAAAAA.toInt())
         }
     }

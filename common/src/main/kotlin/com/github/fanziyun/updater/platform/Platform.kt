@@ -9,6 +9,9 @@ interface Platform {
     val gameDir: Path
     val loaderId: String
     val minecraftVersion: String get() = BuildInfo.minecraftVersion
+
+    /** Running loader version, used to decide whether the target mrpack requires a loader upgrade. */
+    val loaderVersion: String get() = ""
     val protectedModPaths: Set<String> get() = emptySet()
     val selfJar: Path? get() = null
 
